@@ -343,6 +343,7 @@ var toolRegistry = []Tool{
 			"stopOnEntry": boolProp("pause at program entry"),
 			"mainClass":   stringProp("Java main class (when lang=java)"),
 			"classpath":   stringProp("Java classpath (when lang=java)"),
+			"sourceRoots": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "source roots for path resolution"},
 		}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, rest, err := extractSession(raw)

@@ -51,6 +51,7 @@ type LaunchCfg struct {
 	StopOnEntry bool
 	MainClass   string
 	Classpath   string
+	SourceRoots []string
 }
 
 // AttachCfg captures the user-visible parameters of `sl-dbg attach`.

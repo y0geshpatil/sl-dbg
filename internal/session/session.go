@@ -53,6 +53,11 @@ type Session struct {
 	bpNextLocalID   int
 	bpsByID         map[int]*BP // local id -> BP info
 
+	// lastTerminal captures the most recent exited/terminated event so that
+	// late waiters (`listen` issued after the program already died) get an
+	// immediate, correct response instead of blocking until the timeout.
+	lastTerminal *stopEvent
+
 	cli  *dap.Client
 	proc *exec.Cmd
 	caps godap.Capabilities
@@ -241,6 +246,7 @@ func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Sess
 		StopOnEntry: args.StopOnEntry,
 		MainClass:   args.MainClass,
 		Classpath:   args.Classpath,
+		SourceRoots: args.SourceRoots,
 	})
 	if err != nil {
 		return nil, err
@@ -540,9 +546,11 @@ func (m *Manager) register(s *Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.sessions[s.ID] = s
-	if m.defID == "" {
-		m.defID = s.ID
-	}
+	// Promote every new session to default. The most-recent session is
+	// almost always the one the user wants their next command to target;
+	// the old behavior (first-wins) silently sent commands to a stale
+	// session when the user started a second one.
+	m.defID = s.ID
 }
 
 // validateName ensures a user-supplied session name is unique and safe.
@@ -632,6 +640,8 @@ func (s *Session) handleEvent(msg godap.Message) {
 		s.mu.Lock()
 		s.state = StateExited
 		s.exitCode = &ec
+		ecCopy := ec
+		s.lastTerminal = &stopEvent{reason: "exited", exited: &ecCopy}
 		s.mu.Unlock()
 		s.notifyWaiters(stopEvent{reason: "exited", exited: &ec})
 
@@ -639,6 +649,10 @@ func (s *Session) handleEvent(msg godap.Message) {
 		s.mu.Lock()
 		if s.state != StateExited {
 			s.state = StateTerminated
+		}
+		// Don't overwrite an earlier ExitedEvent (which carries the code).
+		if s.lastTerminal == nil {
+			s.lastTerminal = &stopEvent{reason: "terminated", terminated: true}
 		}
 		s.mu.Unlock()
 		s.notifyWaiters(stopEvent{reason: "terminated", terminated: true})
@@ -648,6 +662,16 @@ func (s *Session) handleEvent(msg godap.Message) {
 // installWaiter registers a one-shot waiter for the next stop/exit/terminate event.
 func (s *Session) installWaiter() chan stopEvent {
 	ch := make(chan stopEvent, 1)
+	// If the session has already terminated, satisfy this waiter immediately
+	// so listeners that arrived late still get the correct answer.
+	s.mu.Lock()
+	if s.lastTerminal != nil {
+		ev := *s.lastTerminal
+		s.mu.Unlock()
+		ch <- ev
+		return ch
+	}
+	s.mu.Unlock()
 	s.waitersMu.Lock()
 	s.waiters = append(s.waiters, ch)
 	s.waitersMu.Unlock()
@@ -910,6 +934,32 @@ func (s *Session) Outputs(since time.Time, tail int) []OutputEntry {
 		out = out[len(out)-tail:]
 	}
 	return out
+}
+
+// RecentStderrTail returns up to maxBytes worth of the most recent stderr +
+// stdout entries concatenated, newest last. Used to enrich LAUNCH_FAILED
+// errors with a snippet of what the doomed program actually said.
+func (s *Session) RecentStderrTail(maxBytes int) string {
+	s.bufMu.Lock()
+	defer s.bufMu.Unlock()
+	if len(s.outputs) == 0 {
+		return ""
+	}
+	var b []byte
+	for i := len(s.outputs) - 1; i >= 0; i-- {
+		e := s.outputs[i]
+		if e.Category != "stderr" && e.Category != "console" && e.Category != "stdout" {
+			continue
+		}
+		if len(b)+len(e.Output) > maxBytes && len(b) > 0 {
+			break
+		}
+		b = append([]byte(e.Output), b...)
+		if len(b) >= maxBytes {
+			break
+		}
+	}
+	return string(b)
 }
 
 // Events returns captured event log entries with the same filtering.

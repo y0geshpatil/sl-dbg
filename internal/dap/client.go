@@ -313,37 +313,37 @@ func (c *Client) SetBreakpoints(ctx context.Context, source godap.Source, bps []
 	return m.(*godap.SetBreakpointsResponse), nil
 }
 
-func (c *Client) Continue(ctx context.Context, threadID int) error {
+func (c *Client) Continue(ctx context.Context, threadID int, singleThread bool) error {
 	req := &godap.ContinueRequest{
 		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "continue"},
-		Arguments: godap.ContinueArguments{ThreadId: threadID},
+		Arguments: godap.ContinueArguments{ThreadId: threadID, SingleThread: singleThread},
 	}
 	_, err := c.Call(ctx, req, 10*time.Second)
 	return err
 }
 
-func (c *Client) Next(ctx context.Context, threadID int) error {
+func (c *Client) Next(ctx context.Context, threadID int, singleThread bool) error {
 	req := &godap.NextRequest{
 		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "next"},
-		Arguments: godap.NextArguments{ThreadId: threadID},
+		Arguments: godap.NextArguments{ThreadId: threadID, SingleThread: singleThread},
 	}
 	_, err := c.Call(ctx, req, 10*time.Second)
 	return err
 }
 
-func (c *Client) StepIn(ctx context.Context, threadID int) error {
+func (c *Client) StepIn(ctx context.Context, threadID int, singleThread bool) error {
 	req := &godap.StepInRequest{
 		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "stepIn"},
-		Arguments: godap.StepInArguments{ThreadId: threadID},
+		Arguments: godap.StepInArguments{ThreadId: threadID, SingleThread: singleThread},
 	}
 	_, err := c.Call(ctx, req, 10*time.Second)
 	return err
 }
 
-func (c *Client) StepOut(ctx context.Context, threadID int) error {
+func (c *Client) StepOut(ctx context.Context, threadID int, singleThread bool) error {
 	req := &godap.StepOutRequest{
 		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "stepOut"},
-		Arguments: godap.StepOutArguments{ThreadId: threadID},
+		Arguments: godap.StepOutArguments{ThreadId: threadID, SingleThread: singleThread},
 	}
 	_, err := c.Call(ctx, req, 10*time.Second)
 	return err

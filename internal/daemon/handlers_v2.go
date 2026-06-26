@@ -32,12 +32,18 @@ func (s *Server) handleWatch(ctx context.Context, req proto.Request) proto.Respo
 	case "", "list":
 		return ok(proto.WatchResult{Watches: s.evaluateWatches(ctx, sess, args.Frame)})
 	case "add":
+		if rerr := refuseIfReadOnly(sess); rerr != nil {
+			return *rerr
+		}
 		if args.Expression == "" {
 			return errResp("USAGE_ERROR", "watch add requires an expression", "")
 		}
 		sess.AddWatch(args.Expression)
 		return ok(proto.WatchResult{Watches: s.evaluateWatches(ctx, sess, args.Frame)})
 	case "remove":
+		if rerr := refuseIfReadOnly(sess); rerr != nil {
+			return *rerr
+		}
 		if args.All {
 			sess.ClearWatches()
 		} else if args.ID > 0 {
@@ -372,6 +378,9 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	if rerr := refuseIfReadOnly(sess); rerr != nil {
+		return *rerr
+	}
 	if !sess.Caps().SupportsFunctionBreakpoints {
 		return errResp("UNSUPPORTED_FEATURE",
 			"adapter does not support function breakpoints",
@@ -426,6 +435,9 @@ func (s *Server) handleBreakEx(ctx context.Context, req proto.Request) proto.Res
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+	}
+	if rerr := refuseIfReadOnly(sess); rerr != nil {
+		return *rerr
 	}
 	supported := sess.Caps().ExceptionBreakpointFilters
 	if len(supported) == 0 {
@@ -541,7 +553,7 @@ func (s *Server) handleUntil(ctx context.Context, req proto.Request) proto.Respo
 	if args.Thread > 0 {
 		thread = args.Thread
 	}
-	if err := sess.Client().Continue(ctx, thread); err != nil {
+	if err := sess.Client().Continue(ctx, thread, false); err != nil {
 		_, _ = sess.RemoveBP(bp.LocalID)
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}

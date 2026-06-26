@@ -198,6 +198,7 @@ type StartArgs struct {
 	ReadOnly    bool     `json:"readOnly,omitempty"`
 	MainClass   string   `json:"mainClass,omitempty"`
 	Classpath   string   `json:"classpath,omitempty"`
+	SourceRoots []string `json:"sourceRoots,omitempty"`
 }
 
 type AttachArgs struct {
@@ -246,13 +247,23 @@ type BreaksResult struct {
 }
 
 type ContinueArgs struct {
-	Thread     int     `json:"thread,omitempty"`
-	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+	Thread       int     `json:"thread,omitempty"`
+	TimeoutSec   float64 `json:"timeoutSec,omitempty"`
+	// SingleThread, when true, resumes only the named thread and leaves the
+	// rest suspended (DAP standard). Default false = resume every thread,
+	// which is the right choice for "I'm done debugging, let the program
+	// run" — and avoids the worker-thread-deadlock trap where a parked
+	// pool thread blocks a FutureTask.get() in the resumed thread.
+	SingleThread bool `json:"singleThread,omitempty"`
 }
 
 type StepArgs struct {
-	Thread     int     `json:"thread,omitempty"`
-	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+	Thread       int     `json:"thread,omitempty"`
+	TimeoutSec   float64 `json:"timeoutSec,omitempty"`
+	// SingleThread, when true, freezes other threads while stepping. The
+	// default (false) lets the rest of the program continue between steps;
+	// this is what most debuggers do and avoids subtle deadlocks.
+	SingleThread bool `json:"singleThread,omitempty"`
 }
 
 type StackArgs struct {

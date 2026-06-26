@@ -51,12 +51,13 @@ func init() {
 			if cfg.MainClass == "" {
 				return nil, fmt.Errorf("java launch requires --main <mainClass>")
 			}
+			cpEntries := splitClasspath(cfg.Classpath)
 			args := map[string]interface{}{
 				"name":       "sl-dbg launch",
 				"type":       "java",
 				"request":    "launch",
 				"mainClass":  cfg.MainClass,
-				"classPaths": splitClasspath(cfg.Classpath),
+				"classPaths": cpEntries,
 				"args":       joinArgs(cfg.Args),
 			}
 			if cfg.StopOnEntry {
@@ -64,6 +65,18 @@ func init() {
 			}
 			if cfg.Cwd != "" {
 				args["cwd"] = cfg.Cwd
+			}
+			// Source paths: explicit --source-root wins; otherwise infer from
+			// classpath entries (directories often double as source roots in
+			// simple projects) plus cwd. Without this, the Java adapter falls
+			// back to cwd-relative path fabrication and the CLI's `source`
+			// command can read an unrelated file with the same basename.
+			roots := cfg.SourceRoots
+			if len(roots) == 0 {
+				roots = inferJavaSourceRoots(cfg.Cwd, cpEntries)
+			}
+			if len(roots) > 0 {
+				args["sourcePaths"] = roots
 			}
 			return args, nil
 		},
@@ -148,6 +161,44 @@ func joinArgs(args []string) string {
 			out += " "
 		}
 		out += a
+	}
+	return out
+}
+
+// inferJavaSourceRoots picks reasonable defaults for sourcePaths when the
+// user did not pass --source-root. We use:
+//   - cfg.Cwd (so a simple "javac Foo.java && sl-dbg start --main Foo" works)
+//   - every directory entry on the classpath (often these are bin/ but in
+//     simple workflows the .java lives next to the .class)
+//   - common Maven/Gradle source layouts under cwd ("src/main/java",
+//     "src/test/java") when they exist.
+//
+// Returning a superset is safe: the provider only echoes paths that exist.
+func inferJavaSourceRoots(cwd string, classpath []string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	add := func(p string) {
+		if p == "" || seen[p] {
+			return
+		}
+		if info, err := os.Stat(p); err == nil && info.IsDir() {
+			seen[p] = true
+			out = append(out, p)
+		}
+	}
+	if cwd == "" {
+		if wd, err := os.Getwd(); err == nil {
+			cwd = wd
+		}
+	}
+	add(cwd)
+	for _, e := range classpath {
+		add(e)
+	}
+	if cwd != "" {
+		for _, conv := range []string{"src/main/java", "src/test/java", "src"} {
+			add(filepath.Join(cwd, conv))
+		}
 	}
 	return out
 }

@@ -66,7 +66,6 @@ See https://github.com/yogeshpatil/sl-dbg for full documentation.`,
 	root.AddCommand(newFinishCmd())
 	root.AddCommand(newPauseCmd())
 	root.AddCommand(newUntilCmd())
-	root.AddCommand(newGotoCmd())
 
 	// Inspection
 	root.AddCommand(newStackCmd())

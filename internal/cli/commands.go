@@ -55,6 +55,18 @@ func abs(p string) string {
 	return a
 }
 
+// absAll is abs applied across a slice (used for repeatable path flags).
+func absAll(ps []string) []string {
+	if len(ps) == 0 {
+		return nil
+	}
+	out := make([]string, len(ps))
+	for i, p := range ps {
+		out[i] = abs(p)
+	}
+	return out
+}
+
 // absLocation rewrites "file:line" or "Class:line" so that file paths become absolute.
 // Class names (no path separator, no extension match) are passed through unchanged.
 func absLocation(loc string) string {
@@ -83,7 +95,7 @@ func hasSourceExt(p string) bool {
 
 func newStartCmd() *cobra.Command {
 	var lang, name, program, cwd, mainClass, classpath string
-	var args, env []string
+	var args, env, sourceRoots []string
 	var stopOnEntry, readOnly bool
 	c := &cobra.Command{
 		Use:   "start",
@@ -105,6 +117,7 @@ func newStartCmd() *cobra.Command {
 				Lang: lang, Name: name, Program: abs(program), Args: args, Cwd: abs(cwd),
 				Env: env, StopOnEntry: stopOnEntry, ReadOnly: readOnly,
 				MainClass: mainClass, Classpath: abs(classpath),
+				SourceRoots: absAll(sourceRoots),
 			})
 		},
 	}
@@ -118,6 +131,7 @@ func newStartCmd() *cobra.Command {
 	c.Flags().BoolVar(&readOnly, "read-only", false, "forbid state mutation")
 	c.Flags().StringVar(&mainClass, "main", "", "main class (java)")
 	c.Flags().StringVar(&classpath, "classpath", "", "classpath (java)")
+	c.Flags().StringSliceVar(&sourceRoots, "source-root", nil, "source root for path resolution (repeatable; java)")
 	return c
 }
 
@@ -141,7 +155,7 @@ func newAttachCmd() *cobra.Command {
 			}
 			return callRaw(proto.CmdAttach, "", proto.AttachArgs{
 				Lang: lang, Name: name, Host: host, Port: port, PID: pid,
-				ReadOnly: readOnly, SourceRoots: sourceRoots,
+				ReadOnly: readOnly, SourceRoots: absAll(sourceRoots),
 			})
 		},
 	}
@@ -386,49 +400,67 @@ func newRunCmd() *cobra.Command {
 }
 
 func newContinueCmd() *cobra.Command {
-	return &cobra.Command{
+	var singleThread bool
+	c := &cobra.Command{
 		Use:     "continue",
 		Aliases: []string{"c"},
 		Short:   "Resume until next pause",
+		Long: `Resume the program. By default all suspended threads are released,
+which matches DAP semantics and avoids deadlocks where a parked worker
+thread blocks the resumed thread (e.g. FutureTask.get(), Lock.tryLock()).
+
+Use --single-thread to resume only the focus thread; the rest stay
+suspended until the next stop+continue.`,
 		RunE: func(*cobra.Command, []string) error {
 			return callRaw(proto.CmdContinue, gFlags.Session, proto.ContinueArgs{
-				TimeoutSec: timeoutSec(),
+				TimeoutSec: timeoutSec(), SingleThread: singleThread,
 			})
 		},
 	}
+	c.Flags().BoolVar(&singleThread, "single-thread", false, "resume only the focus thread (DAP singleThread)")
+	return c
 }
 
 func newStepCmd() *cobra.Command {
-	return &cobra.Command{
+	var singleThread bool
+	c := &cobra.Command{
 		Use:     "step",
 		Aliases: []string{"si"},
 		Short:   "Step into",
 		RunE: func(*cobra.Command, []string) error {
-			return callRaw(proto.CmdStep, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec()})
+			return callRaw(proto.CmdStep, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec(), SingleThread: singleThread})
 		},
 	}
+	c.Flags().BoolVar(&singleThread, "single-thread", false, "freeze other threads while stepping")
+	return c
 }
 
 func newNextCmd() *cobra.Command {
-	return &cobra.Command{
+	var singleThread bool
+	c := &cobra.Command{
 		Use:     "next",
 		Aliases: []string{"n"},
 		Short:   "Step over",
 		RunE: func(*cobra.Command, []string) error {
-			return callRaw(proto.CmdNext, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec()})
+			return callRaw(proto.CmdNext, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec(), SingleThread: singleThread})
 		},
 	}
+	c.Flags().BoolVar(&singleThread, "single-thread", false, "freeze other threads while stepping")
+	return c
 }
 
 func newFinishCmd() *cobra.Command {
-	return &cobra.Command{
+	var singleThread bool
+	c := &cobra.Command{
 		Use:     "finish",
 		Aliases: []string{"out"},
 		Short:   "Step out",
 		RunE: func(*cobra.Command, []string) error {
-			return callRaw(proto.CmdFinish, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec()})
+			return callRaw(proto.CmdFinish, gFlags.Session, proto.StepArgs{TimeoutSec: timeoutSec(), SingleThread: singleThread})
 		},
 	}
+	c.Flags().BoolVar(&singleThread, "single-thread", false, "freeze other threads while stepping")
+	return c
 }
 
 func newPauseCmd() *cobra.Command {
@@ -467,14 +499,8 @@ func newUntilCmd() *cobra.Command {
 	return c
 }
 
-func newGotoCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "goto <line>",
-		Short: "Jump to line [planned]",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("goto") },
-	}
-}
+// (goto removed: never implemented; advertising "planned" commands violates
+// the principle that every listed command must work.)
 
 // --- Inspection ---
 
