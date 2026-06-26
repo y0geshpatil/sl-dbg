@@ -725,17 +725,24 @@ func newInstallAdapterCmd() *cobra.Command {
 func newDaemonCmd() *cobra.Command { return newDaemonCmd2() }
 
 func newMCPCmd() *cobra.Command {
-	return &cobra.Command{
+	var readOnly bool
+	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run as an MCP server over stdio",
 		Long: `Speak the Model Context Protocol over stdin/stdout, exposing every
 sl-dbg command as an MCP tool. Designed to be wired into Claude Desktop,
-Cursor, Continue, or any MCP-aware client.`,
+Cursor, Continue, or any MCP-aware client.
+
+Use --read-only to hide tools that can change debugger or program state
+(start, attach, break, continue/step, eval, watch add/remove, etc.). The
+remaining inspection-only tools are safe to expose to an untrusted agent.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			srv := mcp.NewServer(os.Stdin, os.Stdout, mcpDaemonCaller{})
+			srv := mcp.NewServerWithOptions(os.Stdin, os.Stdout, mcpDaemonCaller{}, mcp.Options{ReadOnly: readOnly})
 			return srv.Run(context.Background())
 		},
 	}
+	c.Flags().BoolVar(&readOnly, "read-only", false, "expose only inspection tools; hide mutating ones")
+	return c
 }
 
 // --- helpers ---
