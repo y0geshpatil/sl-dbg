@@ -1,0 +1,65 @@
+name: 🐛 Bug report
+description: Something is broken or behaves unexpectedly in sl-dbg
+title: "[bug] "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please complete the sections below so we can reproduce quickly.
+        For sensitive issues (e.g., secrets leak) email the maintainer instead of filing publicly.
+  - type: input
+    id: version
+    attributes:
+      label: sl-dbg version
+      description: Output of `sl-dbg version`
+      placeholder: '{"version":"d2dcecd","commit":"d2dcecd",...}'
+    validations:
+      required: true
+  - type: dropdown
+    id: lang
+    attributes:
+      label: Language adapter
+      options: [python, go, java, multiple/none, "n/a — CLI / daemon / MCP issue"]
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options: [macOS (Apple Silicon), macOS (Intel), Linux (x86_64), Linux (arm64), other]
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      description: Exact commands (sl-dbg invocations) and a minimal target program if relevant.
+      placeholder: |
+        1. `sl-dbg start --lang java --main Foo --classpath .`
+        2. `sl-dbg break Foo:14`
+        3. `sl-dbg continue`
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior (include full JSON response)
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: daemon_log
+    attributes:
+      label: Daemon log tail (optional)
+      description: |
+        Run `sl-dbg daemon logs` to find the path, then paste the last ~30 lines.
+        Secrets are auto-redacted but please double-check before pasting.
+      render: shell

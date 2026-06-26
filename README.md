@@ -166,6 +166,9 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 | [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) | How AI agents should *use* sl-dbg as a debugger |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model & safe-use guide |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, code style, testing |
+| [docs/TRIAGE.md](docs/TRIAGE.md) | Issue/PR labels, priorities, and how triage works |
+| [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community ground rules |
+| [SECURITY.md](SECURITY.md) | How to report a vulnerability (don't file public issues) |
 
 ## Status
 

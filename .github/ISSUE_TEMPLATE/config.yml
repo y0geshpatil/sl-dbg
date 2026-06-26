@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Security vulnerability
+    url: https://github.com/y0geshpatil/sl-dbg/blob/main/docs/SECURITY.md
+    about: For security issues (e.g., secret leak, sandbox escape), follow the disclosure policy. Do NOT file a public issue.
+  - name: 💬 Discussion / open-ended chat
+    url: https://github.com/y0geshpatil/sl-dbg/discussions
+    about: For broader design / strategy conversations, prefer Discussions over Issues.
