@@ -1,13 +1,42 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/yogeshpatil/sl-dbg/internal/mcp"
 	"github.com/yogeshpatil/sl-dbg/internal/proto"
 )
+
+// mcpDaemonCaller adapts daemonCall to the mcp.DaemonCaller interface.
+type mcpDaemonCaller struct{}
+
+func (mcpDaemonCaller) Call(cmd, sess string, args interface{}) (json.RawMessage, error) {
+	var raw json.RawMessage
+	if args != nil {
+		raw = rawJSON(args)
+	}
+	resp, err := daemonCall(proto.Request{Cmd: cmd, Sess: sess, Args: raw})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.OK {
+		if resp.Error != nil {
+			return nil, fmt.Errorf("%s: %s", resp.Error.Code, resp.Error.Message)
+		}
+		return nil, fmt.Errorf("daemon error")
+	}
+	if len(resp.Data) == 0 {
+		return json.RawMessage(`null`), nil
+	}
+	return resp.Data, nil
+}
 
 // abs resolves p against the CLI's CWD. Empty returns "".
 func abs(p string) string {
@@ -621,8 +650,14 @@ func newDaemonCmd() *cobra.Command { return newDaemonCmd2() }
 func newMCPCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "mcp",
-		Short: "Run as an MCP server over stdio [Phase 5 — planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("mcp") },
+		Short: "Run as an MCP server over stdio",
+		Long: `Speak the Model Context Protocol over stdin/stdout, exposing every
+sl-dbg command as an MCP tool. Designed to be wired into Claude Desktop,
+Cursor, Continue, or any MCP-aware client.`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			srv := mcp.NewServer(os.Stdin, os.Stdout, mcpDaemonCaller{})
+			return srv.Run(context.Background())
+		},
 	}
 }
 
