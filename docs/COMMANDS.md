@@ -94,6 +94,10 @@ Non-blocking: returns current session state.
   "location":{"file":"app.py","line":42,"function":"login"},
   "thread":1}}
 ```
+When the session has terminated, `location`, `thread`, and the pause `reason` are intentionally omitted — only the terminal facts survive:
+```json
+{"ok":true,"data":{"state":"exited","reason":"exited","exitCode":0}}
+```
 
 ---
 

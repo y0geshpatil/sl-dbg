@@ -742,6 +742,18 @@ func (s *Session) SetLastLocation(loc *proto.Loc) {
 	s.mu.Unlock()
 }
 
+// ExitCode returns the recorded process exit code if the session has exited
+// via an ExitedEvent, or nil otherwise.
+func (s *Session) ExitCode() *int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.exitCode == nil {
+		return nil
+	}
+	ec := *s.exitCode
+	return &ec
+}
+
 // StopWaiter is an opaque handle to a single-shot waiter for the next stop /
 // exit / terminate event on this session. Install one BEFORE issuing the DAP
 // request that triggers the event, then call Wait to block on the result.

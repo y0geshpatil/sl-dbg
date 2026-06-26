@@ -337,9 +337,21 @@ func (s *Server) handleState(req proto.Request) proto.Response {
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	st := string(sess.State())
+	// For terminal states, the previously-cached pause reason/location/thread
+	// are stale and misleading — clients use Location.Line to drive UI and
+	// would loop forever thinking the program is still paused. Surface only
+	// the terminal facts (state, reason, exitCode).
+	if st == string(session.StateExited) || st == string(session.StateTerminated) {
+		pi := proto.PauseInfo{State: st, Reason: st}
+		if ec := sess.ExitCode(); ec != nil {
+			pi.ExitCode = ec
+		}
+		return ok(pi)
+	}
 	reason, hitBP, loc := sess.LastPause()
 	return ok(proto.PauseInfo{
-		State:    string(sess.State()),
+		State:    st,
 		Reason:   reason,
 		Thread:   sess.CurrentThread(),
 		Location: loc,

@@ -141,3 +141,50 @@ func TestLangEnumInSchema(t *testing.T) {
 		t.Errorf("expected lang enum in schema; got: %s", out.String()[:600])
 	}
 }
+
+// Issue #5: when the bp doesn't verify, inspect_at must not resume — otherwise
+// the program runs to completion and every eval comes back "no frames".
+func TestInspectAtShortCircuitsOnUnverifiedBP(t *testing.T) {
+	c := &scriptedCaller{
+		replies: map[string]json.RawMessage{
+			"sessions": json.RawMessage(`{"sessions":[{"id":"s1"}]}`),
+			"break":    json.RawMessage(`{"id":1,"line":71,"verified":false,"reason":"unverified: line has no executable code"}`),
+		},
+	}
+	in := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"debug_inspect_at","arguments":{"location":"Foo.java:71","expressions":["i"]}}}` + "\n")
+	var out bytes.Buffer
+	s := NewServer(in, &out, c)
+	_ = s.Run(context.Background())
+	for _, call := range c.calls {
+		if call.cmd == "continue" || call.cmd == "eval" || call.cmd == "locals" {
+			t.Fatalf("inspect_at should not have called %s after unverified bp; calls=%+v", call.cmd, c.calls)
+		}
+	}
+	if !strings.Contains(out.String(), "BREAKPOINT_UNVERIFIED") {
+		t.Errorf("expected BREAKPOINT_UNVERIFIED in response: %s", out.String())
+	}
+}
+
+// Issue #5 follow-up: if continue completes by program-exit rather than
+// hitting our bp, skip locals/eval and surface a typed error.
+func TestInspectAtShortCircuitsOnExit(t *testing.T) {
+	c := &scriptedCaller{
+		replies: map[string]json.RawMessage{
+			"sessions": json.RawMessage(`{"sessions":[{"id":"s1"}]}`),
+			"break":    json.RawMessage(`{"id":1,"line":71,"verified":true}`),
+			"continue": json.RawMessage(`{"state":"exited","reason":"exited","exitCode":0}`),
+		},
+	}
+	in := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"debug_inspect_at","arguments":{"location":"Foo.java:71","expressions":["i"]}}}` + "\n")
+	var out bytes.Buffer
+	s := NewServer(in, &out, c)
+	_ = s.Run(context.Background())
+	for _, call := range c.calls {
+		if call.cmd == "eval" || call.cmd == "locals" {
+			t.Fatalf("inspect_at should not have called %s after non-paused stop; calls=%+v", call.cmd, c.calls)
+		}
+	}
+	if !strings.Contains(out.String(), "INSPECT_NOT_PAUSED") {
+		t.Errorf("expected INSPECT_NOT_PAUSED in response: %s", out.String())
+	}
+}

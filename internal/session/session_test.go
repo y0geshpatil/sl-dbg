@@ -84,3 +84,25 @@ func TestExcFiltersRoundTrip(t *testing.T) {
 		t.Errorf("filters: %v", got)
 	}
 }
+
+// Issue #6: after the session exits, the ExitCode accessor must return the
+// recorded code so handleState can suppress the stale pause location and
+// surface the real exit reason instead.
+func TestExitCodeAccessor(t *testing.T) {
+	s := &Session{ID: "test"}
+	if s.ExitCode() != nil {
+		t.Errorf("ExitCode on fresh session: want nil, got %v", *s.ExitCode())
+	}
+	ec := 42
+	s.exitCode = &ec
+	got := s.ExitCode()
+	if got == nil || *got != 42 {
+		t.Errorf("ExitCode: want 42, got %v", got)
+	}
+	// Returned pointer must be a copy — mutating the caller's int must not
+	// corrupt session state.
+	*got = 99
+	if *s.exitCode != 42 {
+		t.Errorf("ExitCode aliased internal state; session exitCode now %d", *s.exitCode)
+	}
+}

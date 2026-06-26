@@ -123,9 +123,44 @@ func handleInspectAt(s *Server, sess string, raw json.RawMessage) (interface{}, 
 	if err != nil {
 		return nil, fmt.Errorf("break: %w", err)
 	}
+	// Refuse to continue with an unverified bp — otherwise the program runs
+	// to completion and every eval comes back "no frames in current stack",
+	// which is useless and looks like a tool bug. Issue #5.
+	var bpRes proto.BreakResult
+	_ = json.Unmarshal(bpRaw, &bpRes)
+	if !bpRes.Verified {
+		reason := bpRes.Reason
+		if reason == "" {
+			reason = "breakpoint did not verify at requested location"
+		}
+		return map[string]interface{}{
+			"breakpoint": bpRaw,
+			"error": map[string]interface{}{
+				"code":    "BREAKPOINT_UNVERIFIED",
+				"message": reason,
+				"hint":    "pick an executable line in the same method (not loop headers or '}' lines); ensure the class is loaded with --stop-on-entry before calling inspect_at",
+			},
+		}, nil
+	}
 	stopRaw, err := s.caller.Call(proto.CmdContinue, sess, proto.ContinueArgs{TimeoutSec: a.TimeoutSec})
 	if err != nil {
 		return nil, fmt.Errorf("continue: %w", err)
+	}
+	// If the program didn't actually stop at our breakpoint (timeout, exit,
+	// terminate), bail out before issuing locals/eval — those would just
+	// return "no frames in current stack" and obscure the real reason.
+	var stopPI proto.PauseInfo
+	_ = json.Unmarshal(stopRaw, &stopPI)
+	if stopPI.State != "paused" {
+		return map[string]interface{}{
+			"breakpoint": bpRaw,
+			"stop":       stopRaw,
+			"error": map[string]interface{}{
+				"code":    "INSPECT_NOT_PAUSED",
+				"message": fmt.Sprintf("program did not pause at %s (state=%s, reason=%s)", a.Location, stopPI.State, stopPI.Reason),
+				"hint":    "the breakpoint never fired — confirm the line is reachable from the current execution point, or raise timeoutSec",
+			},
+		}, nil
 	}
 	localsRaw, _ := s.caller.Call(proto.CmdLocals, sess, proto.LocalsArgs{})
 	evals := make(map[string]json.RawMessage, len(a.Expressions))
