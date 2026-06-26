@@ -64,7 +64,18 @@ Map the rest similarly:
 | `debug_set_var` | `sl-dbg set <name> <value>` |
 | `debug_stop` | `sl-dbg stop` |
 
-When Phase 5 lands, `sl-dbg mcp` exposes these as native MCP tools — zero glue.
+When using MCP, `sl-dbg mcp` exposes these as native JSON-RPC 2.0 tools — zero glue. Every tool accepts an optional `session` string; omit it and the daemon's default (newest started) is used.
+
+### MCP composites (highly recommended for agents)
+
+The MCP server ships pre-baked composites that collapse common multi-step flows into a single tool call. Prefer these over raw `debug_start → debug_break → debug_continue → debug_locals` chains; they're cheaper for the LLM and avoid race conditions.
+
+| Tool | What it does in one call |
+|---|---|
+| `debug_run_until_break` | start (or attach) → set breakpoint → continue → return pause snapshot |
+| `debug_inspect_at` | set BP → run to it → snapshot locals + evaluate a list of expressions → continue |
+| `debug_explain_pause` | return a one-paragraph English summary of where the program paused, what changed, which watches moved |
+| `debug_snapshot_compact` | snapshot capped at N vars per scope; token-budget aware |
 
 ## Patterns
 

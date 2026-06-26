@@ -17,14 +17,16 @@ sl-dbg stop
 
 That's it. No REPL. No protocol. Just commands.
 
-## Status (v0.1)
+## Status
 
-| Language | Adapter | Install (smooth) | E2E verified |
+`sl-dbg` is a single static Go binary with an embedded daemon and MCP server. macOS + Linux are first-class; Windows is out of scope.
+
+| Language | Adapter | Install | E2E verified |
 |---|---|---|---|
 | Python | `debugpy` (Microsoft) | `pip install --user debugpy` | ✅ |
 | Go | `dlv dap` (Delve) | `go install github.com/go-delve/delve/cmd/dlv@latest` | ✅ |
-| Java | `java-debug` (Microsoft, embedded) | `sl-dbg install-adapter java` — builds the bundled launcher fat-jar | ✅ |
-| Node.js, Rust, C/C++, .NET | planned | each lands via `sl-dbg install-adapter <lang>` downloading a published binary | ⏳ |
+| Java | `java-debug` (Microsoft, embedded launcher) | `sl-dbg install-adapter java` | ✅ |
+| Node.js, Rust, C/C++, .NET | planned | each lands via `sl-dbg install-adapter <lang>` | ⏳ |
 
 ### Why is Java different?
 Of all mainstream languages, Java is the **only** one whose official DAP adapter (Microsoft's `java-debug`) does not ship as a standalone runnable. It's an OSGi bundle meant to be loaded inside Eclipse JDT-LS. The clean fix — implemented like every other professional DAP tool (CodeLLDB, netcoredbg, Delve) — is for the `sl-dbg` project to publish a small Java launcher fat-jar via GitHub Releases, fetched on demand by `sl-dbg install-adapter java`. That work is tracked in `ROADMAP.md`. No user-facing build-from-source step.
@@ -53,15 +55,16 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 
 ### Install
 ```bash
-# From a source checkout — one command, sets up CLI + every adapter:
-git clone <repo> sl-dbg && cd sl-dbg
+# From a source checkout — one command, builds CLI + installs every adapter:
+git clone https://github.com/y0geshpatil/sl-dbg.git && cd sl-dbg
 make setup            # builds ./bin/sl-dbg AND installs python/go/java adapters
+make install          # places sl-dbg on $GOPATH/bin (add to PATH)
 
 # Or install adapters individually any time:
-./bin/sl-dbg install-adapter all              # python (debugpy) + go (dlv) + java (launcher jar)
-./bin/sl-dbg install-adapter python           # just debugpy
-./bin/sl-dbg install-adapter go               # just dlv
-./bin/sl-dbg install-adapter java             # just the embedded Java DAP launcher
+sl-dbg install-adapter all              # python (debugpy) + go (dlv) + java (launcher jar)
+sl-dbg install-adapter python           # just debugpy
+sl-dbg install-adapter go               # just dlv
+sl-dbg install-adapter java             # just the embedded Java DAP launcher
 
 # Future, once we publish releases:
 brew install sl-dbg                           # macOS / Linux (planned)
@@ -155,17 +158,18 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 
 | Document | What it covers |
 |---|---|
+| [AGENTS.md](AGENTS.md) | Orientation for AI agents that need to *modify* this codebase |
 | [docs/DESIGN.md](docs/DESIGN.md) | Architecture, components, data flow, design rationale |
 | [docs/COMMANDS.md](docs/COMMANDS.md) | Full command reference & JSON schemas |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased build plan with milestones |
 | [docs/ADAPTERS.md](docs/ADAPTERS.md) | Per-language adapter setup & auto-install |
-| [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) | How AI agents should use sl-dbg |
+| [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) | How AI agents should *use* sl-dbg as a debugger |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model & safe-use guide |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, code style, testing |
 
 ## Status
 
-🚧 **Pre-alpha.** Active scaffolding. See [ROADMAP.md](docs/ROADMAP.md).
+Pre-1.0. Python / Go / Java adapters are fully working with field-tested coverage; the wire schema (`schema:"1"`) is considered stable. See [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## License
 
