@@ -4,6 +4,7 @@ package cli
 import (
 	"errors"
 	"fmt"
+	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -73,6 +74,7 @@ See https://github.com/yogeshpatil/sl-dbg for full documentation.`,
 	root.AddCommand(newLocalsCmd())
 	root.AddCommand(newGlobalsCmd())
 	root.AddCommand(newFieldsCmd())
+	root.AddCommand(newPrintCmd())
 	root.AddCommand(newEvalCmd())
 	root.AddCommand(newSetVarCmd())
 	root.AddCommand(newSnapshotCmd())
@@ -89,6 +91,17 @@ See https://github.com/yogeshpatil/sl-dbg for full documentation.`,
 	root.AddCommand(newDaemonCmd())
 	root.AddCommand(newLogsCmd())
 	root.AddCommand(newMCPCmd())
+	root.AddCommand(newReplCmd())
+
+	// Auto-enable pretty output on a TTY (only when --json not explicitly set).
+	root.PersistentPreRunE = func(c *cobra.Command, _ []string) error {
+		if !c.PersistentFlags().Changed("pretty") && !c.PersistentFlags().Changed("json") {
+			if isTerminal(os.Stdout.Fd()) {
+				gFlags.Pretty = true
+			}
+		}
+		return nil
+	}
 
 	return root
 }

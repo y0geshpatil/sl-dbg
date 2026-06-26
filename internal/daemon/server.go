@@ -182,6 +182,8 @@ func (s *Server) handle(req proto.Request) proto.Response {
 		return s.handleBreakEx(ctx, req)
 	case proto.CmdUntil:
 		return s.handleUntil(ctx, req)
+	case proto.CmdPrint:
+		return s.handlePrint(ctx, req)
 	default:
 		return errResp("UNKNOWN_COMMAND", fmt.Sprintf("unknown command: %q", req.Cmd), "")
 	}

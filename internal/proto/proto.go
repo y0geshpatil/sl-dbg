@@ -62,7 +62,35 @@ const (
 	CmdRestart   = "restart"
 	CmdUntil     = "until"
 	CmdRun       = "run"
+	CmdPrint     = "print"
 )
+
+// PrintArgs requests a deep, recursive variable dump.
+// Provide either Expression (eval first, then walk) or Ref (walk an existing
+// variablesReference from a prior locals/eval/fields call). Depth limits the
+// recursion; 0 means a single level (like a plain eval/fields).
+type PrintArgs struct {
+	Expression string `json:"expression,omitempty"`
+	Ref        int    `json:"ref,omitempty"`
+	Frame      int    `json:"frame,omitempty"`
+	Depth      int    `json:"depth,omitempty"`     // recursion levels; default 3
+	MaxItems   int    `json:"maxItems,omitempty"`  // per-container cap; default 50
+	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+}
+
+// PrintNode is one node in the rendered variable tree.
+type PrintNode struct {
+	Name     string      `json:"name,omitempty"`
+	Value    string      `json:"value"`
+	Type     string      `json:"type,omitempty"`
+	Ref      int         `json:"ref,omitempty"`
+	Truncated bool       `json:"truncated,omitempty"`
+	Children []PrintNode `json:"children,omitempty"`
+}
+
+type PrintResult struct {
+	Root PrintNode `json:"root"`
+}
 
 // WatchAction selects whether to add, remove, or list watch expressions.
 type WatchArgs struct {
@@ -161,6 +189,7 @@ type UntilArgs struct {
 
 type StartArgs struct {
 	Lang        string   `json:"lang"`
+	Name        string   `json:"name,omitempty"`
 	Program     string   `json:"program"`
 	Args        []string `json:"args,omitempty"`
 	Cwd         string   `json:"cwd,omitempty"`
@@ -173,6 +202,7 @@ type StartArgs struct {
 
 type AttachArgs struct {
 	Lang        string   `json:"lang"`
+	Name        string   `json:"name,omitempty"`
 	Host        string   `json:"host,omitempty"`
 	Port        int      `json:"port,omitempty"`
 	PID         int      `json:"pid,omitempty"`

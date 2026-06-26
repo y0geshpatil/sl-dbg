@@ -575,3 +575,91 @@ func javaClassFromFrame(ctx context.Context, sess *session.Session, idx int) str
 	}
 	return ""
 }
+
+// ----- print (recursive expansion) -----
+
+func (s *Server) handlePrint(ctx context.Context, req proto.Request) proto.Response {
+	var args proto.PrintArgs
+	if err := unmarshalArgs(req.Args, &args); err != nil {
+		return errResp("USAGE_ERROR", err.Error(), "")
+	}
+	if args.Expression == "" && args.Ref <= 0 {
+		return errResp("USAGE_ERROR", "print requires --expr or --ref", "")
+	}
+	depth := args.Depth
+	if depth <= 0 {
+		depth = 3
+	}
+	maxItems := args.MaxItems
+	if maxItems <= 0 {
+		maxItems = 50
+	}
+	sess, err := s.mgr.Get(req.Sess)
+	if err != nil {
+		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+	}
+	if args.TimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec*float64(time.Second)))
+		defer cancel()
+	}
+	root := proto.PrintNode{}
+	if args.Expression != "" {
+		frameID, err := resolveFrameID(ctx, sess, args.Frame)
+		if err != nil {
+			return errResp("ADAPTER_FAILED", err.Error(), "")
+		}
+		r, err := sess.Client().Evaluate(ctx, args.Expression, frameID, "repl")
+		if err != nil {
+			return errResp("ADAPTER_FAILED", err.Error(), "")
+		}
+		root = proto.PrintNode{
+			Name:  args.Expression,
+			Value: r.Body.Result,
+			Type:  r.Body.Type,
+			Ref:   r.Body.VariablesReference,
+		}
+	} else {
+		root.Ref = args.Ref
+	}
+	if root.Ref > 0 && depth > 0 {
+		kids, trunc, err := expandRef(ctx, sess, root.Ref, depth, maxItems)
+		if err != nil {
+			return errResp("ADAPTER_FAILED", err.Error(), "")
+		}
+		root.Children = kids
+		root.Truncated = trunc
+	}
+	return ok(proto.PrintResult{Root: root})
+}
+
+func expandRef(ctx context.Context, sess *session.Session, ref, depth, maxItems int) ([]proto.PrintNode, bool, error) {
+	vars, err := sess.Client().Variables(ctx, ref)
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := false
+	src := vars.Body.Variables
+	if len(src) > maxItems {
+		src = src[:maxItems]
+		truncated = true
+	}
+	out := make([]proto.PrintNode, 0, len(src))
+	for _, v := range src {
+		n := proto.PrintNode{
+			Name:  v.Name,
+			Value: v.Value,
+			Type:  v.Type,
+			Ref:   v.VariablesReference,
+		}
+		if v.VariablesReference > 0 && depth-1 > 0 {
+			kids, trunc, err := expandRef(ctx, sess, v.VariablesReference, depth-1, maxItems)
+			if err == nil {
+				n.Children = kids
+				n.Truncated = trunc
+			}
+		}
+		out = append(out, n)
+	}
+	return out, truncated, nil
+}

@@ -82,14 +82,15 @@ func hasSourceExt(p string) bool {
 // --- Session lifecycle ---
 
 func newStartCmd() *cobra.Command {
-	var lang, program, cwd, mainClass, classpath string
+	var lang, name, program, cwd, mainClass, classpath string
 	var args, env []string
 	var stopOnEntry, readOnly bool
 	c := &cobra.Command{
 		Use:   "start",
 		Short: "Launch a new debug session by starting a program",
 		Example: `  sl-dbg start --lang python --program ./app.py
-  sl-dbg start --lang java --main com.example.App --classpath ./out`,
+  sl-dbg start --lang java --main com.example.App --classpath ./out
+  sl-dbg start --name api --lang python --program ./api.py`,
 		RunE: func(*cobra.Command, []string) error {
 			if lang == "" {
 				return Usage("--lang is required")
@@ -101,13 +102,14 @@ func newStartCmd() *cobra.Command {
 				return Usage("--program is required")
 			}
 			return callRaw(proto.CmdStart, "", proto.StartArgs{
-				Lang: lang, Program: abs(program), Args: args, Cwd: abs(cwd),
+				Lang: lang, Name: name, Program: abs(program), Args: args, Cwd: abs(cwd),
 				Env: env, StopOnEntry: stopOnEntry, ReadOnly: readOnly,
 				MainClass: mainClass, Classpath: abs(classpath),
 			})
 		},
 	}
 	c.Flags().StringVar(&lang, "lang", "", "language (python|java|...)")
+	c.Flags().StringVar(&name, "name", "", "session name (default: random hex id)")
 	c.Flags().StringVar(&program, "program", "", "path to entrypoint")
 	c.Flags().StringVar(&cwd, "cwd", "", "working directory")
 	c.Flags().StringSliceVar(&args, "args", nil, "program arguments")
@@ -120,7 +122,7 @@ func newStartCmd() *cobra.Command {
 }
 
 func newAttachCmd() *cobra.Command {
-	var lang, host string
+	var lang, name, host string
 	var port, pid int
 	var sourceRoots []string
 	var readOnly bool
@@ -128,7 +130,8 @@ func newAttachCmd() *cobra.Command {
 		Use:   "attach",
 		Short: "Attach to a running process by host:port or PID",
 		Example: `  sl-dbg attach --lang java --host localhost --port 5005
-  sl-dbg attach --lang python --pid 12345`,
+  sl-dbg attach --lang python --pid 12345
+  sl-dbg attach --name prod --lang java --port 5005`,
 		RunE: func(*cobra.Command, []string) error {
 			if lang == "" {
 				return Usage("--lang is required")
@@ -137,12 +140,13 @@ func newAttachCmd() *cobra.Command {
 				return Usage("either --port or --pid is required")
 			}
 			return callRaw(proto.CmdAttach, "", proto.AttachArgs{
-				Lang: lang, Host: host, Port: port, PID: pid,
+				Lang: lang, Name: name, Host: host, Port: port, PID: pid,
 				ReadOnly: readOnly, SourceRoots: sourceRoots,
 			})
 		},
 	}
 	c.Flags().StringVar(&lang, "lang", "", "language")
+	c.Flags().StringVar(&name, "name", "", "session name (default: random hex id)")
 	c.Flags().StringVar(&host, "host", "localhost", "remote host")
 	c.Flags().IntVar(&port, "port", 0, "remote debug port")
 	c.Flags().IntVar(&pid, "pid", 0, "process id")
@@ -526,7 +530,10 @@ func newFieldsCmd() *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		Example: `  # First get a ref from locals or eval:
   sl-dbg locals
-  sl-dbg fields 7`,
+  sl-dbg fields 7
+
+  # For recursive expansion (collections, nested objects), use 'print' instead:
+  sl-dbg print --ref 7 --depth 3`,
 		RunE: func(_ *cobra.Command, a []string) error {
 			ref, err := atoi(a[0])
 			if err != nil || ref <= 0 {
@@ -535,6 +542,57 @@ func newFieldsCmd() *cobra.Command {
 			return callRaw(proto.CmdFields, gFlags.Session, proto.FieldsArgs{Ref: ref})
 		},
 	}
+	return c
+}
+
+func newPrintCmd() *cobra.Command {
+	var (
+		expr     string
+		ref      int
+		frame    int
+		depth    int
+		maxItems int
+		timeout  string
+	)
+	c := &cobra.Command{
+		Use:   "print [expr]",
+		Short: "Recursively expand a value (collections, nested objects)",
+		Long: `Evaluate an expression (or walk an existing variables-reference) and
+recursively dump its structure to the given depth. Designed for inspecting
+Java collections, deeply-nested objects, and anything 'fields' shows as
+raw cells.`,
+		Example: `  # Print a local variable up to 3 levels deep:
+  sl-dbg print myMap
+
+  # Walk an existing ref from 'locals':
+  sl-dbg print --ref 7 --depth 5
+
+  # Cap each container to 100 items:
+  sl-dbg print bigList --depth 2 --max 100`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(_ *cobra.Command, a []string) error {
+			if len(a) > 0 {
+				expr = a[0]
+			}
+			if expr == "" && ref <= 0 {
+				return Usage("print requires an <expr> argument or --ref N")
+			}
+			secs, err := parseTimeoutFlag(timeout, 0)
+			if err != nil {
+				return Usage("invalid --timeout: %v", err)
+			}
+			return callRaw(proto.CmdPrint, gFlags.Session, proto.PrintArgs{
+				Expression: expr, Ref: ref, Frame: frame,
+				Depth: depth, MaxItems: maxItems, TimeoutSec: secs,
+			})
+		},
+	}
+	c.Flags().StringVar(&expr, "expr", "", "expression to evaluate (alternative to positional)")
+	c.Flags().IntVar(&ref, "ref", 0, "variables-reference from a prior locals/eval/fields call")
+	c.Flags().IntVar(&frame, "frame", 0, "frame index")
+	c.Flags().IntVar(&depth, "depth", 3, "recursion depth")
+	c.Flags().IntVar(&maxItems, "max", 50, "max items per container")
+	c.Flags().StringVar(&timeout, "timeout", "", "max wait (Go duration like 30s)")
 	return c
 }
 

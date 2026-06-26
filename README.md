@@ -110,6 +110,23 @@ sl-dbg mcp
 **Python**
 - `debugpy` reports `hitBreakpointIds` as `null`; `--once` is honored via a file:line fallback (handled internally).
 
+## Power-user features
+
+- **`sl-dbg repl`** — interactive shell that keeps one daemon connection open across many commands (10× snappier than spawning sl-dbg per command). `exit` / Ctrl-D to leave. `!<line>` and `#` comments supported.
+- **`sl-dbg print <expr> --depth N`** — recursive expansion for collections and nested objects. Use instead of `fields <ref>` when raw cells aren't useful.
+  ```bash
+  sl-dbg print myMap --depth 3
+  sl-dbg print --ref 7 --depth 5 --max 100
+  ```
+- **`--name <id>`** — give a session a memorable name instead of a random hex id:
+  ```bash
+  sl-dbg start --name api --lang python --program ./api.py
+  sl-dbg --session api break ./api.py:42
+  ```
+- **`--frame N`** — every inspection command (`locals`, `globals`, `eval`, `set`, `watch --add`, `print`) accepts `--frame N` to inspect a caller's frame without stepping out.
+- **`events --tail N --since RFC3339`** — bounded log queries; same for `output`.
+- **Pretty on TTY** — `--pretty` auto-enables when stdout is a terminal; remains plain JSON when piped.
+
 ## Architecture
 
 ```

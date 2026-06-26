@@ -591,4 +591,26 @@ var toolRegistry = []Tool{
 			return proto.CmdAdapters, "", nil, nil
 		},
 	},
+	{
+		Name:        "debug_print",
+		Description: "Recursively expand a value (collections, nested objects) to a given depth.",
+		InputSchema: objectSchema(nil, map[string]interface{}{
+			"expression": stringProp("expression to evaluate (or use ref)"),
+			"ref":        intProp("variables-reference from a prior locals/eval/fields call"),
+			"frame":      intProp("frame index"),
+			"depth":      intProp("recursion depth (default 3)"),
+			"maxItems":   intProp("max items per container (default 50)"),
+		}),
+		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
+			sess, rest, err := extractSession(raw)
+			if err != nil {
+				return "", "", nil, err
+			}
+			var a proto.PrintArgs
+			if err := json.Unmarshal(rest, &a); err != nil {
+				return "", "", nil, err
+			}
+			return proto.CmdPrint, sess, a, nil
+		},
+	},
 }

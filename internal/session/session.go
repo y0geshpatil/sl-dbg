@@ -250,6 +250,13 @@ func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Sess
 	if err != nil {
 		return nil, err
 	}
+	if args.Name != "" {
+		if err := m.validateName(args.Name); err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.ID = args.Name
+	}
 	s.Program = args.Program
 	s.ReadOnly = args.ReadOnly
 
@@ -326,6 +333,13 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 	s, err := m.startAdapter(ctx, spec, args.Lang)
 	if err != nil {
 		return nil, err
+	}
+	if args.Name != "" {
+		if err := m.validateName(args.Name); err != nil {
+			s.Close()
+			return nil, err
+		}
+		s.ID = args.Name
 	}
 	s.ReadOnly = args.ReadOnly
 	if args.Port != 0 {
@@ -529,6 +543,26 @@ func (m *Manager) register(s *Session) {
 	if m.defID == "" {
 		m.defID = s.ID
 	}
+}
+
+// validateName ensures a user-supplied session name is unique and safe.
+func (m *Manager) validateName(name string) error {
+	for _, c := range name {
+		ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_'
+		if !ok {
+			return fmt.Errorf("session name must be [A-Za-z0-9_-]; got %q", name)
+		}
+	}
+	if len(name) == 0 || len(name) > 64 {
+		return fmt.Errorf("session name must be 1..64 chars")
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, exists := m.sessions[name]; exists {
+		return fmt.Errorf("session name %q already in use", name)
+	}
+	return nil
 }
 
 // startEventPump forwards DAP events into the session's internal handlers.
