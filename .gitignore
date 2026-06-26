@@ -1,0 +1,28 @@
+# Binaries
+/bin/
+/dist/
+sl-dbg
+sl-dbgd
+
+# Go build cache & test artifacts
+*.test
+*.out
+*.prof
+coverage.*
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+
+# Local config / state
+/.local/
+*.log
+*.sock
+
+# Adapter cache (auto-downloaded jars/binaries)
+/.cache/
+
+# Vendor (we use modules; vendor only if explicitly enabled)
+/vendor/
