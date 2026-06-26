@@ -339,10 +339,13 @@ func boolProp(desc string) map[string]interface{} {
 // languages sl-dbg currently understands. This lets IDE-style hosts surface a
 // dropdown rather than a freeform text input.
 func langEnumProp(desc string) map[string]interface{} {
+	// Issue #42: only list adapters that are actually implemented and tested.
+	// node / cpp / dotnet / rust were aspirational placeholders that caused
+	// agents to attempt unsupported langs and get cryptic adapter errors.
 	return map[string]interface{}{
 		"type":        "string",
 		"description": desc,
-		"enum":        []string{"python", "go", "java", "node", "cpp", "dotnet", "rust"},
+		"enum":        []string{"python", "go", "java"},
 	}
 }
 

@@ -2,8 +2,30 @@ package adapter
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 )
+
+// goInstallDirs returns the candidate directories where `go install` may have
+// placed binaries: $GOBIN, then each $GOPATH/bin, then ~/go/bin as the
+// documented fallback. Used by the go adapter Detect to avoid the
+// PATH-vs-GOPATH/bin mismatch in #44.
+func goInstallDirs() []string {
+	var dirs []string
+	if v := os.Getenv("GOBIN"); v != "" {
+		dirs = append(dirs, v)
+	}
+	if v := os.Getenv("GOPATH"); v != "" {
+		for _, p := range filepath.SplitList(v) {
+			dirs = append(dirs, filepath.Join(p, "bin"))
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, "go", "bin"))
+	}
+	return dirs
+}
 
 // Go adapter: wraps `dlv dap` (Delve).
 //
@@ -17,14 +39,34 @@ func init() {
 		Lang:      "go",
 		AdapterID: "go",
 		Detect: func() (string, error) {
-			p, err := exec.LookPath("dlv")
-			if err != nil {
-				return "", fmt.Errorf("dlv not found in PATH")
+			// Issue #44: `go install` writes binaries to $GOBIN, $GOPATH/bin,
+			// or ~/go/bin. Those locations aren't always on PATH (especially
+			// in newer Go installs where users rely on `go run`). Fall back
+			// to the standard install dirs so `install-adapter go` and
+			// `adapters` agree.
+			if p, err := exec.LookPath("dlv"); err == nil {
+				return p, nil
 			}
-			return p, nil
+			for _, dir := range goInstallDirs() {
+				cand := filepath.Join(dir, "dlv")
+				if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+					return cand, nil
+				}
+			}
+			return "", fmt.Errorf("dlv not found in PATH or in $GOBIN / $GOPATH/bin / ~/go/bin")
 		},
 		LaunchAdapter: func() ([]string, Transport, error) {
 			p, err := exec.LookPath("dlv")
+			if err != nil {
+				for _, dir := range goInstallDirs() {
+					cand := filepath.Join(dir, "dlv")
+					if fi, statErr := os.Stat(cand); statErr == nil && !fi.IsDir() {
+						p = cand
+						err = nil
+						break
+					}
+				}
+			}
 			if err != nil {
 				return nil, TransportStdio, err
 			}

@@ -137,7 +137,7 @@ func TestLangEnumInSchema(t *testing.T) {
 	var out bytes.Buffer
 	s := NewServer(in, &out, c)
 	_ = s.Run(context.Background())
-	if !strings.Contains(out.String(), `"enum":["python","go","java","node","cpp","dotnet","rust"]`) {
+	if !strings.Contains(out.String(), `"enum":["python","go","java"]`) {
 		t.Errorf("expected lang enum in schema; got: %s", out.String()[:600])
 	}
 }
