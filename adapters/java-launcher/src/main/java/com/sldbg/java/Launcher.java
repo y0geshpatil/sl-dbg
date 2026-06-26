@@ -75,7 +75,7 @@ public final class Launcher {
         pc.registerProvider(ISourceLookUpProvider.class, new SimpleSourceLookUpProvider());
         pc.registerProvider(IVirtualMachineManagerProvider.class, new JdiVirtualMachineManagerProvider());
         pc.registerProvider(IHotCodeReplaceProvider.class, new NoOpHotCodeReplaceProvider());
-        pc.registerProvider(IEvaluationProvider.class, new NoOpEvaluationProvider());
+        pc.registerProvider(IEvaluationProvider.class, new JdiEvaluationProvider());
         pc.registerProvider(ICompletionsProvider.class, new NoOpCompletionsProvider());
         return pc;
     }

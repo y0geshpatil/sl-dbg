@@ -29,6 +29,18 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.11.0</version>
+                <configuration>
+                    <source>11</source>
+                    <target>11</target>
+                    <compilerArgs>
+                        <arg>--add-exports=jdk.jdi/com.sun.tools.example.debug.expr=ALL-UNNAMED</arg>
+                    </compilerArgs>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
                 <version>3.5.1</version>
                 <executions>
@@ -40,6 +52,9 @@
                             <transformers>
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
                                     <mainClass>com.sldbg.java.Launcher</mainClass>
+                                    <manifestEntries>
+                                        <Add-Exports>jdk.jdi/com.sun.tools.example.debug.expr</Add-Exports>
+                                    </manifestEntries>
                                 </transformer>
                             </transformers>
                             <filters>

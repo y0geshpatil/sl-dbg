@@ -74,9 +74,24 @@ sl-dbg stop
 | `pause`                              | ✅     |
 | `stack`                              | ✅     |
 | `locals` (variable inspection)       | ✅     |
+| `eval <expr>`                        | ✅ — locals, fields, array indexing, method calls, casts, string concat |
+| `break ... --if "<expr>"` (conditional breakpoints) | ✅ |
 | `stop`                               | ✅     |
-| `eval <expr>` and conditional breakpoints | ⚠️ Not yet — needs an evaluation provider (planned). |
-| `start --lang java` (launch mode)    | ⚠️ Not yet — needs a project-model launch front-end. |
+| Hot code replace                     | ⚠️ planned (`javax.tools.JavaCompiler` + JDI `redefineClasses`) |
+| `start --lang java` (launch mode)    | ⚠️ planned — needs a project-model launch front-end. |
 
-For the moment, use JDWP attach with `suspend=y` (see flow above) for any
-workflow where you want to break before the program starts running.
+### Expression evaluator
+
+`eval` and the `--if` condition on `break` are powered by the OpenJDK-bundled
+`com.sun.tools.example.debug.expr.ExpressionParser` — the same engine `jdb`
+uses. Supported syntax includes identifiers in scope, field access, array
+indexing, instance & qualified-static method calls, arithmetic, comparison,
+logical/bitwise ops, string concatenation, casts, `instanceof`, `new`, and
+literals.
+
+Note: unqualified static method names need their class prefix (use
+`Buggy.compute(x)`, not bare `compute(x)`) — the evaluator does not infer
+the enclosing class.
+
+For workflows where you want to break before the program starts running,
+use JDWP attach with `suspend=y` (see flow above).

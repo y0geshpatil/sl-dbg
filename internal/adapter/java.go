@@ -41,7 +41,11 @@ func init() {
 			if err != nil {
 				return nil, TransportTCPListen, err
 			}
-			return []string{java, "-jar", jar, "--port={PORT}"}, TransportTCPListen, nil
+			return []string{
+				java,
+				"--add-exports=jdk.jdi/com.sun.tools.example.debug.expr=ALL-UNNAMED",
+				"-jar", jar, "--port={PORT}",
+			}, TransportTCPListen, nil
 		},
 		BuildLaunchArgs: func(cfg LaunchCfg) (map[string]interface{}, error) {
 			if cfg.MainClass == "" {
