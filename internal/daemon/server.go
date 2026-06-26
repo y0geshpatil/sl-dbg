@@ -389,6 +389,12 @@ func (s *Server) handleStop(req proto.Request) proto.Response {
 	if sid == "" {
 		return errResp("SESSION_NOT_FOUND", "no active session", "")
 	}
+	// Issue #48: don't silently report success for a session id the daemon
+	// has never seen. Idempotency over an unknown id hid bugs in callers.
+	if _, err := s.mgr.Get(sid); err != nil {
+		return errResp("SESSION_NOT_FOUND", fmt.Sprintf("no session %q", sid),
+			"call `debug_sessions` to see live ids")
+	}
 	s.mgr.Remove(sid)
 	return ok(proto.SessionResult{SessionID: sid, State: string(session.StateTerminated)})
 }

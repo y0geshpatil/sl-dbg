@@ -390,7 +390,14 @@ var toolRegistry = []Tool{
 			if err := json.Unmarshal(rest, &a); err != nil {
 				return "", "", nil, err
 			}
-			return proto.CmdStart, sess, a, nil
+			// Issue #49: on `debug_start`, the optional `session` arg names
+			// the NEW session (since the daemon hasn't created it yet).
+			// Pass it through as StartArgs.Name and route the request with
+			// empty `sess` so the daemon allocates rather than looking up.
+			if sess != "" && a.Name == "" {
+				a.Name = sess
+			}
+			return proto.CmdStart, "", a, nil
 		},
 	},
 	{
@@ -413,7 +420,11 @@ var toolRegistry = []Tool{
 			if err := json.Unmarshal(rest, &a); err != nil {
 				return "", "", nil, err
 			}
-			return proto.CmdAttach, sess, a, nil
+			// Issue #49: same fix for `debug_attach` (new session name).
+			if sess != "" && a.Name == "" {
+				a.Name = sess
+			}
+			return proto.CmdAttach, "", a, nil
 		},
 	},
 	{
@@ -654,13 +665,17 @@ var toolRegistry = []Tool{
 		},
 	},
 	{
-		Name:        "debug_eval",
-		Mutating:    true,
-		Description: "Evaluate an expression in the current frame.",
+		Name:     "debug_eval",
+		Mutating: true,
+		Description: "Evaluate an expression in the current frame. Use for ad-hoc inspection " +
+			"(`x + 1`, `obj.method()`) and quick what-if probes; sl-dbg auto-qualifies bare " +
+			"static-field names in Java. DO NOT use for repeated inspection of the same " +
+			"expression — use `debug_watch add` instead. Daemon may block expressions matching " +
+			"SL_DBG_DENY_EVAL_PATTERNS (default: Java side-effect classes like FileOutputStream).",
 		InputSchema: objectSchema([]string{"expression"}, map[string]interface{}{
-			"expression": stringProp("expression"),
-			"frame":      intProp("frame index"),
-			"timeoutSec": map[string]interface{}{"type": "number", "description": "max seconds for evaluation"},
+			"expression": stringProp("expression to evaluate; e.g. `x + 1`, `obj.method()`"),
+			"frame":      intProp("frame index (0 = top of stack; default 0)"),
+			"timeoutSec": map[string]interface{}{"type": "number", "description": "max seconds for evaluation (default 5)"},
 		}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, rest, _ := extractSession(raw)
@@ -691,12 +706,15 @@ var toolRegistry = []Tool{
 		},
 	},
 	{
-		Name:        "debug_source",
-		Description: "Return source code around current location (or a specific file:line).",
+		Name: "debug_source",
+		Description: "Show source code around the current pause location, or at any file:line. " +
+			"Zero-arg form (`{}`) defaults to the current paused frame. " +
+			"DO NOT use to read arbitrary files outside the program — the daemon may block " +
+			"paths outside SL_DBG_ALLOW_SOURCE_ROOT with SOURCE_PATH_DENIED.",
 		InputSchema: objectSchema(nil, map[string]interface{}{
-			"file":   stringProp("path"),
-			"line":   intProp("center line"),
-			"around": intProp("lines of context on each side; 0 = whole file"),
+			"file":   stringProp("absolute path; defaults to current pause location"),
+			"line":   intProp("center line; defaults to current pause line"),
+			"around": intProp("lines of context on each side; 0 = whole file (default 8)"),
 		}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, rest, _ := extractSession(raw)

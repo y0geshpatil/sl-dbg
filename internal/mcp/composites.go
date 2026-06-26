@@ -272,12 +272,30 @@ func handleExplainPause(s *Server, sess string, raw json.RawMessage) (interface{
 	}
 
 	// Build prose summary.
-	summary := fmt.Sprintf("Paused (%s) at %s:%d in %s.", st.Reason, st.Location.File, st.Location.Line, st.Location.Function)
+	// Issue #29: at Python module-entry (and some other stopOnEntry pauses),
+	// the state.location can come back empty even though the stack has a
+	// resolved top frame. Fall back to the top frame so the summary is never
+	// the embarrassing "Paused (entry) at :0 in .".
+	loc := st.Location
+	if (loc.File == "" || loc.Line == 0) && len(frames) > 0 {
+		loc.File = frames[0].File
+		loc.Line = frames[0].Line
+		loc.Function = frames[0].Function
+	}
+	reason := st.Reason
+	if reason == "" {
+		reason = "stopped"
+	}
+	summary := fmt.Sprintf("Paused (%s) at %s:%d in %s.", reason, loc.File, loc.Line, loc.Function)
 	if len(frames) > 1 {
 		summary += fmt.Sprintf(" Top callers: %s", framesToString(frames[1:]))
 	}
-	if len(vars) > 0 {
-		summary += " Locals: " + varsToString(vars) + "."
+	// Issue #29 / #31: filter Python "special variables" / dunders from the
+	// inline summary — they crowd out the actually-useful locals and have
+	// near-zero information value at module entry.
+	filteredVars := filterDunders(vars)
+	if len(filteredVars) > 0 {
+		summary += " Locals: " + varsToString(filteredVars) + "."
 	}
 	if lc.Hint != "" {
 		summary += " Hint: " + lc.Hint
@@ -287,9 +305,26 @@ func handleExplainPause(s *Server, sess string, raw json.RawMessage) (interface{
 		"summary":      summary,
 		"state":        st,
 		"topFrames":    frames,
-		"localsSample": vars,
+		"localsSample": filteredVars,
 		"watches":      json.RawMessage(watchRaw),
 	}, nil
+}
+
+// filterDunders drops debugpy's "special variables" sentinel and any
+// __dunder__-named entries. Issue #29 / #31.
+func filterDunders(vars []proto.Var) []proto.Var {
+	out := make([]proto.Var, 0, len(vars))
+	for _, v := range vars {
+		n := v.Name
+		if n == "special variables" || n == "function variables" || n == "class variables" {
+			continue
+		}
+		if len(n) >= 4 && n[:2] == "__" && n[len(n)-2:] == "__" {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 func framesToString(frames []struct {

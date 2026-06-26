@@ -139,3 +139,16 @@ func TestAuditLogger(t *testing.T) {
 	noop.Log("eval", "x", nil) // must not panic
 	noop.Close()
 }
+
+func TestIsPythonSpecial(t *testing.T) {
+	for _, n := range []string{"special variables", "function variables", "__init__", "__class__"} {
+		if !isPythonSpecial(n) {
+			t.Errorf("%q should be special", n)
+		}
+	}
+	for _, n := range []string{"x", "self", "_private", "__init", "init__"} {
+		if isPythonSpecial(n) {
+			t.Errorf("%q should NOT be special", n)
+		}
+	}
+}

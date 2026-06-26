@@ -76,6 +76,9 @@ type PrintArgs struct {
 	Depth      int    `json:"depth,omitempty"`     // recursion levels; default 3
 	MaxItems   int    `json:"maxItems,omitempty"`  // per-container cap; default 50
 	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+	// Issue #31: hide debugpy/Python "special variables" and __dunder__
+	// entries from results. Defaults to true; pass --show-special / "showSpecial": true to disable.
+	ShowSpecial bool `json:"showSpecial,omitempty"`
 }
 
 // PrintNode is one node in the rendered variable tree.
@@ -124,7 +127,8 @@ type BreakExArgs struct {
 }
 
 type FieldsArgs struct {
-	Ref int `json:"ref"`
+	Ref         int  `json:"ref"`
+	ShowSpecial bool `json:"showSpecial,omitempty"` // include Python __dunder__/special vars (issue #31)
 }
 
 type GlobalsArgs struct {

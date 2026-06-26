@@ -228,6 +228,9 @@ func (s *Server) handleFields(ctx context.Context, req proto.Request) proto.Resp
 	}
 	out := proto.LocalsResult{Scope: "fields"}
 	for _, v := range vars.Body.Variables {
+		if !args.ShowSpecial && isPythonSpecial(v.Name) {
+			continue
+		}
 		out.Vars = append(out.Vars, proto.Var{
 			Name: v.Name, Value: v.Value, Type: v.Type,
 			Ref: v.VariablesReference, Expandable: v.VariablesReference > 0,
@@ -359,9 +362,13 @@ func (s *Server) handleOutput(req proto.Request) proto.Response {
 	}
 	var since time.Time
 	if args.Since != "" {
-		if t, err := time.Parse(time.RFC3339Nano, args.Since); err == nil {
-			since = t
+		t, perr := time.Parse(time.RFC3339Nano, args.Since)
+		if perr != nil {
+			return errResp("USAGE_ERROR",
+				fmt.Sprintf("invalid 'since' timestamp %q: %v", args.Since, perr),
+				"use RFC3339Nano, e.g. 2026-06-26T19:59:26.279496Z")
 		}
+		since = t
 	}
 	es := sess.Outputs(since, args.Tail)
 	out := proto.OutputResult{Entries: make([]proto.OutputEntry, 0, len(es))}
@@ -384,9 +391,13 @@ func (s *Server) handleEvents(req proto.Request) proto.Response {
 	}
 	var since time.Time
 	if args.Since != "" {
-		if t, err := time.Parse(time.RFC3339Nano, args.Since); err == nil {
-			since = t
+		t, perr := time.Parse(time.RFC3339Nano, args.Since)
+		if perr != nil {
+			return errResp("USAGE_ERROR",
+				fmt.Sprintf("invalid 'since' timestamp %q: %v", args.Since, perr),
+				"use RFC3339Nano, e.g. 2026-06-26T19:59:26.279496Z")
 		}
+		since = t
 	}
 	es := sess.Events(since, args.Tail)
 	out := proto.EventsResult{Events: make([]proto.EventEntry, 0, len(es))}
@@ -745,7 +756,7 @@ func (s *Server) handlePrint(ctx context.Context, req proto.Request) proto.Respo
 		root.Ref = args.Ref
 	}
 	if root.Ref > 0 && depth > 0 {
-		kids, trunc, err := expandRef(ctx, sess, root.Ref, depth, maxItems)
+		kids, trunc, err := expandRefFiltered(ctx, sess, root.Ref, depth, maxItems, args.ShowSpecial)
 		if err != nil {
 			return errResp("ADAPTER_FAILED", err.Error(), "")
 		}
@@ -756,12 +767,29 @@ func (s *Server) handlePrint(ctx context.Context, req proto.Request) proto.Respo
 }
 
 func expandRef(ctx context.Context, sess *session.Session, ref, depth, maxItems int) ([]proto.PrintNode, bool, error) {
+	return expandRefFiltered(ctx, sess, ref, depth, maxItems, false)
+}
+
+// expandRefFiltered is the workhorse: when showSpecial is false, drops the
+// Python "special variables" containers and __dunder__ entries before
+// recursing. Issue #31.
+func expandRefFiltered(ctx context.Context, sess *session.Session, ref, depth, maxItems int, showSpecial bool) ([]proto.PrintNode, bool, error) {
 	vars, err := sess.Client().Variables(ctx, ref)
 	if err != nil {
 		return nil, false, err
 	}
 	truncated := false
 	src := vars.Body.Variables
+	if !showSpecial {
+		filtered := src[:0]
+		for _, v := range src {
+			if isPythonSpecial(v.Name) {
+				continue
+			}
+			filtered = append(filtered, v)
+		}
+		src = filtered
+	}
 	if len(src) > maxItems {
 		src = src[:maxItems]
 		truncated = true
@@ -775,7 +803,7 @@ func expandRef(ctx context.Context, sess *session.Session, ref, depth, maxItems 
 			Ref:   v.VariablesReference,
 		}
 		if v.VariablesReference > 0 && depth-1 > 0 {
-			kids, trunc, err := expandRef(ctx, sess, v.VariablesReference, depth-1, maxItems)
+			kids, trunc, err := expandRefFiltered(ctx, sess, v.VariablesReference, depth-1, maxItems, showSpecial)
 			if err == nil {
 				n.Children = kids
 				n.Truncated = trunc
@@ -784,6 +812,19 @@ func expandRef(ctx context.Context, sess *session.Session, ref, depth, maxItems 
 		out = append(out, n)
 	}
 	return out, truncated, nil
+}
+
+// isPythonSpecial matches debugpy's container labels and __dunder__ names.
+// Issue #29 / #31.
+func isPythonSpecial(name string) bool {
+	switch name {
+	case "special variables", "function variables", "class variables":
+		return true
+	}
+	if len(name) >= 4 && strings.HasPrefix(name, "__") && strings.HasSuffix(name, "__") {
+		return true
+	}
+	return false
 }
 
 // currentTopFrame fetches the top stack frame of the current thread when the
