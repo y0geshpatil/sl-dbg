@@ -160,6 +160,28 @@ func (s *Server) handle(req proto.Request) proto.Response {
 		return s.handleSet(ctx, req)
 	case proto.CmdSnapshot:
 		return s.handleSnapshot(ctx, req)
+	case proto.CmdWatch:
+		return s.handleWatch(ctx, req)
+	case proto.CmdGlobals:
+		return s.handleGlobals(ctx, req)
+	case proto.CmdFields:
+		return s.handleFields(ctx, req)
+	case proto.CmdSource:
+		return s.handleSource(ctx, req)
+	case proto.CmdOutput:
+		return s.handleOutput(req)
+	case proto.CmdEvents:
+		return s.handleEvents(req)
+	case proto.CmdListen:
+		return s.handleListen(ctx, req)
+	case proto.CmdRestart:
+		return s.handleRestart(ctx, req)
+	case proto.CmdBreakFn:
+		return s.handleBreakFn(ctx, req)
+	case proto.CmdBreakEx:
+		return s.handleBreakEx(ctx, req)
+	case proto.CmdUntil:
+		return s.handleUntil(ctx, req)
 	default:
 		return errResp("UNKNOWN_COMMAND", fmt.Sprintf("unknown command: %q", req.Cmd), "")
 	}
@@ -292,6 +314,7 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 		Line:      line,
 		Condition: args.Condition,
 		LogMsg:    args.LogMsg,
+		Once:      args.Once,
 	}
 	if args.Hit > 0 {
 		bp.HitCond = strconv.Itoa(args.Hit)
@@ -458,9 +481,39 @@ func (s *Server) handleExec(ctx context.Context, req proto.Request, kind execKin
 		if loc := fetchTopLocation(ctx, sess); loc != nil {
 			pi.Location = loc
 			sess.SetLastLocation(loc)
+			// Auto-remove any matching --once breakpoint at this location.
+			// (Fallback for adapters that don't fill HitBreakpointIds.)
+			if pi.Reason == "breakpoint" {
+				clearOnceAt(ctx, sess, loc.File, loc.Line)
+			}
 		}
 	}
 	return ok(pi)
+}
+
+func clearOnceAt(ctx context.Context, sess *session.Session, file string, line int) {
+	for _, b := range sess.BPsForFile(file) {
+		if b.Once && b.Line == line {
+			_, _ = sess.RemoveBP(b.LocalID)
+		}
+	}
+	// Resync the file's BPs.
+	remaining := sess.BPsForFile(file)
+	dapBPs := make([]godap.SourceBreakpoint, 0, len(remaining))
+	for _, b := range remaining {
+		sb := godap.SourceBreakpoint{Line: b.Line}
+		if b.Condition != "" {
+			sb.Condition = b.Condition
+		}
+		if b.HitCond != "" {
+			sb.HitCondition = b.HitCond
+		}
+		if b.LogMsg != "" {
+			sb.LogMessage = b.LogMsg
+		}
+		dapBPs = append(dapBPs, sb)
+	}
+	_, _ = sess.Client().SetBreakpoints(ctx, godap.Source{Path: file}, dapBPs)
 }
 
 func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Response {
@@ -592,8 +645,16 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if sess.ReadOnly {
 		context_ = "watch"
 	}
+	if args.TimeoutSec > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec*float64(time.Second)))
+		defer cancel()
+	}
 	r, err := sess.Client().Evaluate(ctx, args.Expression, frameID, context_)
 	if err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return errResp("TIMEOUT", "evaluation exceeded timeout", "increase --timeout or simplify the expression")
+		}
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	return ok(proto.EvalResult{

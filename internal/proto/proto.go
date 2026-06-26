@@ -50,7 +50,114 @@ const (
 	CmdSet      = "set"
 	CmdSnapshot = "snapshot"
 	CmdAdapters = "adapters"
+
+	// New in v1: feature-parity commands.
+	CmdWatch     = "watch"
+	CmdGlobals   = "globals"
+	CmdFields    = "fields"
+	CmdSource    = "source"
+	CmdOutput    = "output"
+	CmdEvents    = "events"
+	CmdListen    = "listen"
+	CmdRestart   = "restart"
+	CmdUntil     = "until"
+	CmdRun       = "run"
 )
+
+// WatchAction selects whether to add, remove, or list watch expressions.
+type WatchArgs struct {
+	Action     string `json:"action"`               // "add" | "remove" | "list"
+	Expression string `json:"expression,omitempty"` // for add
+	ID         int    `json:"id,omitempty"`         // for remove
+	Frame      int    `json:"frame,omitempty"`
+	All        bool   `json:"all,omitempty"`
+}
+
+type WatchEntry struct {
+	ID         int    `json:"id"`
+	Expression string `json:"expression"`
+	Result     string `json:"result,omitempty"`
+	Type       string `json:"type,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+type WatchResult struct {
+	Watches []WatchEntry `json:"watches"`
+}
+
+type BreakFnArgs struct {
+	Function  string `json:"function"`
+	Condition string `json:"condition,omitempty"`
+	Hit       int    `json:"hit,omitempty"`
+}
+
+type BreakExArgs struct {
+	Filters []string `json:"filters"` // e.g., ["uncaught"] or adapter-specific names
+}
+
+type FieldsArgs struct {
+	Ref int `json:"ref"`
+}
+
+type GlobalsArgs struct {
+	Frame int `json:"frame,omitempty"`
+}
+
+type SourceArgs struct {
+	File    string `json:"file,omitempty"`
+	Line    int    `json:"line,omitempty"`
+	Around  int    `json:"around,omitempty"` // num lines of context around line; 0 = whole file
+	Ref     int    `json:"sourceRef,omitempty"`
+}
+
+type SourceResult struct {
+	File    string   `json:"file"`
+	Start   int      `json:"start"`
+	Lines   []string `json:"lines"`
+	Current int      `json:"current,omitempty"`
+}
+
+type OutputArgs struct {
+	Since string `json:"since,omitempty"` // RFC3339Nano timestamp; only return entries after this
+	Tail  int    `json:"tail,omitempty"`  // last N entries (0 = all)
+}
+
+type OutputEntry struct {
+	TS       string `json:"ts"`
+	Category string `json:"category"` // "stdout" | "stderr" | "console" | "telemetry"
+	Output   string `json:"output"`
+}
+
+type OutputResult struct {
+	Entries []OutputEntry `json:"entries"`
+}
+
+type EventsArgs struct {
+	Since string `json:"since,omitempty"`
+	Tail  int    `json:"tail,omitempty"`
+}
+
+type EventEntry struct {
+	TS     string                 `json:"ts"`
+	Type   string                 `json:"type"`
+	Body   map[string]interface{} `json:"body,omitempty"`
+}
+
+type EventsResult struct {
+	Events []EventEntry `json:"events"`
+}
+
+type ListenArgs struct {
+	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+}
+
+type RestartArgs struct{}
+
+type UntilArgs struct {
+	Line       int     `json:"line"`
+	Thread     int     `json:"thread,omitempty"`
+	TimeoutSec float64 `json:"timeoutSec,omitempty"`
+}
 
 type StartArgs struct {
 	Lang        string   `json:"lang"`
@@ -94,6 +201,7 @@ type BreakResult struct {
 	Verified  bool   `json:"verified"`
 	File      string `json:"file,omitempty"`
 	Line      int    `json:"line,omitempty"`
+	Function  string `json:"function,omitempty"`
 	Condition string `json:"condition,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 }
@@ -153,8 +261,9 @@ type LocalsResult struct {
 }
 
 type EvalArgs struct {
-	Expression string `json:"expression"`
-	Frame      int    `json:"frame,omitempty"`
+	Expression string  `json:"expression"`
+	Frame      int     `json:"frame,omitempty"`
+	TimeoutSec float64 `json:"timeoutSec,omitempty"`
 }
 
 type EvalResult struct {

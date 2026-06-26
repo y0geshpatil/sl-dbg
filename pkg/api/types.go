@@ -5,8 +5,13 @@ package api
 
 import "time"
 
+// SchemaVersion identifies the JSON envelope shape. Increment on breaking changes
+// so AI agents / client libraries can detect incompatibilities at runtime.
+const SchemaVersion = "1"
+
 // Response is the standard envelope for every sl-dbg command's stdout.
 type Response struct {
+	Schema  string      `json:"schema"`
 	OK      bool        `json:"ok"`
 	Data    interface{} `json:"data,omitempty"`
 	Error   *Error      `json:"error,omitempty"`

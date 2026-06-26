@@ -449,6 +449,72 @@ func (c *Client) Disconnect(ctx context.Context, terminate bool) error {
 	return err
 }
 
+// SetFunctionBreakpoints replaces the full set of function-name breakpoints.
+func (c *Client) SetFunctionBreakpoints(ctx context.Context, fns []godap.FunctionBreakpoint) (*godap.SetFunctionBreakpointsResponse, error) {
+	req := &godap.SetFunctionBreakpointsRequest{
+		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "setFunctionBreakpoints"},
+		Arguments: godap.SetFunctionBreakpointsArguments{Breakpoints: fns},
+	}
+	m, err := c.Call(ctx, req, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return m.(*godap.SetFunctionBreakpointsResponse), nil
+}
+
+// SetExceptionBreakpoints enables/disables exception breakpoint filters
+// (e.g., "uncaught", "raised"). Adapter advertises supported filters in Caps.
+func (c *Client) SetExceptionBreakpoints(ctx context.Context, filters []string) (*godap.SetExceptionBreakpointsResponse, error) {
+	req := &godap.SetExceptionBreakpointsRequest{
+		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "setExceptionBreakpoints"},
+		Arguments: godap.SetExceptionBreakpointsArguments{Filters: filters},
+	}
+	m, err := c.Call(ctx, req, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return m.(*godap.SetExceptionBreakpointsResponse), nil
+}
+
+// Source returns the source contents for the given source reference or path.
+func (c *Client) Source(ctx context.Context, path string, sourceRef int) (*godap.SourceResponse, error) {
+	req := &godap.SourceRequest{
+		Request: godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "source"},
+		Arguments: godap.SourceArguments{
+			Source:          &godap.Source{Path: path, SourceReference: sourceRef},
+			SourceReference: sourceRef,
+		},
+	}
+	m, err := c.Call(ctx, req, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return m.(*godap.SourceResponse), nil
+}
+
+// Restart asks the adapter to restart the debug session.
+// Many adapters don't implement this and signal that via supportsRestartRequest=false.
+func (c *Client) Restart(ctx context.Context) error {
+	req := &godap.RestartRequest{
+		Request: godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "restart"},
+	}
+	_, err := c.Call(ctx, req, 10*time.Second)
+	return err
+}
+
+// ExceptionInfo returns details about the exception that paused the given thread.
+func (c *Client) ExceptionInfo(ctx context.Context, threadID int) (*godap.ExceptionInfoResponse, error) {
+	req := &godap.ExceptionInfoRequest{
+		Request:   godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "exceptionInfo"},
+		Arguments: godap.ExceptionInfoArguments{ThreadId: threadID},
+	}
+	m, err := c.Call(ctx, req, 10*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	return m.(*godap.ExceptionInfoResponse), nil
+}
+
 // Helpers
 
 func jsonMarshal(v interface{}) ([]byte, error) {

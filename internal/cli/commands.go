@@ -121,11 +121,16 @@ func newAttachCmd() *cobra.Command {
 }
 
 func newListenCmd() *cobra.Command {
-	return &cobra.Command{
+	var timeoutSec float64
+	c := &cobra.Command{
 		Use:   "listen",
-		Short: "Listen for a target to connect (reverse attach) [planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("listen") },
+		Short: "Block until the program stops at a breakpoint, exits, or terminates",
+		RunE: func(*cobra.Command, []string) error {
+			return callRaw(proto.CmdListen, gFlags.Session, proto.ListenArgs{TimeoutSec: timeoutSec})
+		},
 	}
+	c.Flags().Float64Var(&timeoutSec, "timeout", 60, "max seconds to wait")
+	return c
 }
 
 func newSessionsCmd() *cobra.Command {
@@ -167,9 +172,15 @@ func newStopCmd() *cobra.Command {
 func newRestartCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "restart [session-id]",
-		Short: "Restart the target [planned]",
+		Short: "Restart the target (if the adapter supports it)",
 		Args:  cobra.MaximumNArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("restart") },
+		RunE: func(_ *cobra.Command, a []string) error {
+			sid := gFlags.Session
+			if len(a) > 0 {
+				sid = a[0]
+			}
+			return callRaw(proto.CmdRestart, sid, proto.RestartArgs{})
+		},
 	}
 }
 
@@ -214,30 +225,76 @@ func newBreakCmd() *cobra.Command {
 }
 
 func newBreakFnCmd() *cobra.Command {
-	return &cobra.Command{
+	var cond string
+	var hit int
+	c := &cobra.Command{
 		Use:   "break-fn <function>",
-		Short: "Function-entry breakpoint [planned]",
+		Short: "Function-entry breakpoint (e.g., Buggy.compute or my_module.fn)",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("break-fn") },
+		Example: `  sl-dbg break-fn Buggy.compute
+  sl-dbg break-fn my_module.fn --if "x > 100"`,
+		RunE: func(_ *cobra.Command, a []string) error {
+			return callRaw(proto.CmdBreakFn, gFlags.Session, proto.BreakFnArgs{
+				Function: a[0], Condition: cond, Hit: hit,
+			})
+		},
 	}
+	c.Flags().StringVar(&cond, "if", "", "conditional expression")
+	c.Flags().IntVar(&hit, "hit", 0, "break on Nth hit only")
+	return c
 }
 
 func newBreakExCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "break-ex <ExceptionType>",
-		Short: "Exception breakpoint [planned]",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("break-ex") },
+	c := &cobra.Command{
+		Use:   "break-ex <filter>...",
+		Short: "Exception breakpoint (filters: uncaught, raised, or adapter-specific)",
+		Args:  cobra.MinimumNArgs(1),
+		Example: `  sl-dbg break-ex uncaught
+  sl-dbg break-ex raised uncaught`,
+		RunE: func(_ *cobra.Command, a []string) error {
+			return callRaw(proto.CmdBreakEx, gFlags.Session, proto.BreakExArgs{Filters: a})
+		},
 	}
+	return c
 }
 
 func newWatchCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "watch <expression>",
-		Short: "Data breakpoint (when value changes) [planned]",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("watch") },
+	var addExpr, action string
+	var rmID, frame int
+	var rmAll bool
+	c := &cobra.Command{
+		Use:   "watch [--add <expr> | --remove <id> | --remove-all]",
+		Short: "Manage watch expressions (re-evaluated on every pause)",
+		Example: `  sl-dbg watch --add "items.length"
+  sl-dbg watch              # list current watches with values
+  sl-dbg watch --remove 2
+  sl-dbg watch --remove-all`,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			args := proto.WatchArgs{Frame: frame}
+			switch {
+			case addExpr != "":
+				args.Action = "add"
+				args.Expression = addExpr
+			case rmAll:
+				args.Action = "remove"
+				args.All = true
+			case rmID > 0:
+				args.Action = "remove"
+				args.ID = rmID
+			default:
+				args.Action = "list"
+			}
+			if action != "" {
+				args.Action = action
+			}
+			return callRaw(proto.CmdWatch, gFlags.Session, args)
+		},
 	}
+	c.Flags().StringVar(&addExpr, "add", "", "add an expression")
+	c.Flags().IntVar(&rmID, "remove", 0, "remove watch by id")
+	c.Flags().BoolVar(&rmAll, "remove-all", false, "remove all watches")
+	c.Flags().IntVar(&frame, "frame", 0, "stack frame to evaluate in")
+	return c
 }
 
 func newBreaksCmd() *cobra.Command {
@@ -341,12 +398,25 @@ func newPauseCmd() *cobra.Command {
 }
 
 func newUntilCmd() *cobra.Command {
-	return &cobra.Command{
+	var thread int
+	var timeoutSec float64
+	c := &cobra.Command{
 		Use:   "until <line>",
-		Short: "Continue until line [planned]",
+		Short: "Continue execution until a given line in the current file",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("until") },
+		RunE: func(_ *cobra.Command, a []string) error {
+			n, err := atoi(a[0])
+			if err != nil || n <= 0 {
+				return Usage("invalid line: %s", a[0])
+			}
+			return callRaw(proto.CmdUntil, gFlags.Session, proto.UntilArgs{
+				Line: n, Thread: thread, TimeoutSec: timeoutSec,
+			})
+		},
 	}
+	c.Flags().IntVar(&thread, "thread", 0, "thread id (default: current)")
+	c.Flags().Float64Var(&timeoutSec, "timeout", 30, "max seconds to wait")
+	return c
 }
 
 func newGotoCmd() *cobra.Command {
@@ -398,33 +468,52 @@ func newLocalsCmd() *cobra.Command {
 }
 
 func newGlobalsCmd() *cobra.Command {
-	return &cobra.Command{
+	var frame int
+	c := &cobra.Command{
 		Use:   "globals",
-		Short: "Print global variables [planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("globals") },
+		Short: "Print global / module-level variables",
+		RunE: func(*cobra.Command, []string) error {
+			return callRaw(proto.CmdGlobals, gFlags.Session, proto.GlobalsArgs{Frame: frame})
+		},
 	}
+	c.Flags().IntVar(&frame, "frame", 0, "frame index")
+	return c
 }
 
 func newFieldsCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "fields <ref>",
-		Short: "Expand an object reference [planned]",
+		Short: "Expand an object/collection by its variables-reference",
 		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("fields") },
+		Example: `  # First get a ref from locals or eval:
+  sl-dbg locals
+  sl-dbg fields 7`,
+		RunE: func(_ *cobra.Command, a []string) error {
+			ref, err := atoi(a[0])
+			if err != nil || ref <= 0 {
+				return Usage("invalid ref: %s", a[0])
+			}
+			return callRaw(proto.CmdFields, gFlags.Session, proto.FieldsArgs{Ref: ref})
+		},
 	}
+	return c
 }
 
 func newEvalCmd() *cobra.Command {
 	var frame int
+	var timeoutSec float64
 	c := &cobra.Command{
 		Use:   "eval <expression>",
 		Short: "Evaluate an expression",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, a []string) error {
-			return callRaw(proto.CmdEval, gFlags.Session, proto.EvalArgs{Expression: a[0], Frame: frame})
+			return callRaw(proto.CmdEval, gFlags.Session, proto.EvalArgs{
+				Expression: a[0], Frame: frame, TimeoutSec: timeoutSec,
+			})
 		},
 	}
 	c.Flags().IntVar(&frame, "frame", 0, "frame index")
+	c.Flags().Float64Var(&timeoutSec, "timeout", 0, "max seconds for the evaluation (0 = adapter default)")
 	return c
 }
 
@@ -453,29 +542,60 @@ func newSnapshotCmd() *cobra.Command {
 }
 
 func newSourceCmd() *cobra.Command {
-	return &cobra.Command{
+	var file string
+	var line, around int
+	c := &cobra.Command{
 		Use:   "source",
-		Short: "Show source around current line [planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("source") },
+		Short: "Show source code (defaults to current pause location)",
+		Example: `  sl-dbg source                 # source at current line, all lines
+  sl-dbg source --around 5      # 5 lines on each side of current
+  sl-dbg source --file Buggy.java --line 24 --around 3`,
+		RunE: func(*cobra.Command, []string) error {
+			af := file
+			if af != "" && !strings.HasPrefix(af, "/") {
+				af = abs(af)
+			}
+			return callRaw(proto.CmdSource, gFlags.Session, proto.SourceArgs{
+				File: af, Line: line, Around: around,
+			})
+		},
 	}
+	c.Flags().StringVar(&file, "file", "", "source file (default: current)")
+	c.Flags().IntVar(&line, "line", 0, "centerline (default: current)")
+	c.Flags().IntVar(&around, "around", 0, "lines of context on each side (0 = whole file)")
+	return c
 }
 
 // --- I/O ---
 
 func newOutputCmd() *cobra.Command {
-	return &cobra.Command{
+	var since string
+	var tail int
+	c := &cobra.Command{
 		Use:   "output",
-		Short: "Drain target stdout/stderr [planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("output") },
+		Short: "Drain captured target stdout/stderr",
+		RunE: func(*cobra.Command, []string) error {
+			return callRaw(proto.CmdOutput, gFlags.Session, proto.OutputArgs{Since: since, Tail: tail})
+		},
 	}
+	c.Flags().StringVar(&since, "since", "", "RFC3339 timestamp; only return newer entries")
+	c.Flags().IntVar(&tail, "tail", 0, "return only the last N entries (0 = all)")
+	return c
 }
 
 func newEventsCmd() *cobra.Command {
-	return &cobra.Command{
+	var since string
+	var tail int
+	c := &cobra.Command{
 		Use:   "events",
-		Short: "Stream DAP events [planned]",
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("events") },
+		Short: "Get the session DAP event log",
+		RunE: func(*cobra.Command, []string) error {
+			return callRaw(proto.CmdEvents, gFlags.Session, proto.EventsArgs{Since: since, Tail: tail})
+		},
 	}
+	c.Flags().StringVar(&since, "since", "", "RFC3339 timestamp; only return newer events")
+	c.Flags().IntVar(&tail, "tail", 0, "return only the last N events (0 = all)")
+	return c
 }
 
 // --- Meta ---

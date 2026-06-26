@@ -72,6 +72,52 @@ type Session struct {
 	// "Stopped waiter" — when blocking commands run, they install a waiter here.
 	waitersMu sync.Mutex
 	waiters   []chan stopEvent
+
+	// Output and event ring buffers for `sl-dbg output` / `sl-dbg events`.
+	bufMu   sync.Mutex
+	outputs []OutputEntry
+	evlog   []LoggedEvent
+
+	// Watch expressions (re-evaluated on snapshot or on `watch list`).
+	watchMu      sync.Mutex
+	watches      []*Watch
+	watchNextID  int
+
+	// Active exception breakpoint filters (replayed on restart).
+	excFilters []string
+
+	// Active function breakpoints (replayed on restart).
+	funcBPs []FuncBP
+}
+
+// OutputEntry captures one DAP OutputEvent (debuggee stdout/stderr/console).
+type OutputEntry struct {
+	TS       time.Time
+	Category string
+	Output   string
+}
+
+// LoggedEvent captures notable DAP events for later inspection.
+type LoggedEvent struct {
+	TS   time.Time
+	Type string
+	Body map[string]interface{}
+}
+
+// Watch is one watch expression tracked on the session.
+type Watch struct {
+	ID         int
+	Expression string
+}
+
+// FuncBP is a function-name breakpoint stored on the session for replay.
+type FuncBP struct {
+	LocalID   int
+	Name      string
+	Condition string
+	HitCond   string
+	DAPID     int
+	Verified  bool
 }
 
 // BP is a stored breakpoint record on the session side.
@@ -82,7 +128,8 @@ type BP struct {
 	Condition string
 	HitCond   string
 	LogMsg    string
-	DAPID     int // id reported by adapter (may be 0 if not verified yet)
+	Once      bool // remove after first hit
+	DAPID     int  // id reported by adapter (may be 0 if not verified yet)
 	Verified  bool
 }
 
@@ -504,7 +551,11 @@ func (s *Session) startEventPump(initialized chan<- struct{}) {
 }
 
 func (s *Session) handleEvent(msg godap.Message) {
+	// Log every event into a bounded ring buffer for `sl-dbg events`.
+	s.recordEvent(msg)
 	switch ev := msg.(type) {
+	case *godap.OutputEvent:
+		s.recordOutput(ev.Body.Category, ev.Body.Output)
 	case *godap.StoppedEvent:
 		s.mu.Lock()
 		s.state = StatePaused
@@ -516,7 +567,21 @@ func (s *Session) handleEvent(msg godap.Message) {
 		}
 		// location filled later via stack request on demand
 		s.lastLocation = nil
+		// If any "once" breakpoints were hit, mark them for removal.
+		var toRemove []int
+		if len(ev.Body.HitBreakpointIds) > 0 {
+			for _, hid := range ev.Body.HitBreakpointIds {
+				for _, b := range s.bpsByID {
+					if b.Once && b.DAPID == hid {
+						toRemove = append(toRemove, b.LocalID)
+					}
+				}
+			}
+		}
 		s.mu.Unlock()
+		if len(toRemove) > 0 {
+			go s.clearOnceBPs(toRemove)
+		}
 		s.notifyWaiters(stopEvent{
 			reason:   ev.Body.Reason,
 			threadID: ev.Body.ThreadId,
@@ -744,6 +809,209 @@ func (s *Session) BPsForFile(file string) []*BP {
 		}
 	}
 	return out
+}
+
+// ----- output / event ring buffers -----
+
+const maxOutputEntries = 4096
+const maxEventEntries = 1024
+
+func (s *Session) recordOutput(category, output string) {
+	if category == "" {
+		category = "console"
+	}
+	s.bufMu.Lock()
+	s.outputs = append(s.outputs, OutputEntry{TS: time.Now().UTC(), Category: category, Output: output})
+	if n := len(s.outputs); n > maxOutputEntries {
+		s.outputs = append([]OutputEntry(nil), s.outputs[n-maxOutputEntries:]...)
+	}
+	s.bufMu.Unlock()
+}
+
+func (s *Session) recordEvent(msg godap.Message) {
+	ev, ok := msg.(godap.EventMessage)
+	if !ok {
+		return
+	}
+	body := map[string]interface{}{}
+	switch e := msg.(type) {
+	case *godap.StoppedEvent:
+		body["reason"] = e.Body.Reason
+		body["threadId"] = e.Body.ThreadId
+		body["hitBreakpointIds"] = e.Body.HitBreakpointIds
+	case *godap.ContinuedEvent:
+		body["threadId"] = e.Body.ThreadId
+	case *godap.ExitedEvent:
+		body["exitCode"] = e.Body.ExitCode
+	case *godap.OutputEvent:
+		body["category"] = e.Body.Category
+		body["output"] = e.Body.Output
+	case *godap.ThreadEvent:
+		body["reason"] = e.Body.Reason
+		body["threadId"] = e.Body.ThreadId
+	case *godap.BreakpointEvent:
+		body["reason"] = e.Body.Reason
+	}
+	s.bufMu.Lock()
+	s.evlog = append(s.evlog, LoggedEvent{TS: time.Now().UTC(), Type: ev.GetEvent().Event, Body: body})
+	if n := len(s.evlog); n > maxEventEntries {
+		s.evlog = append([]LoggedEvent(nil), s.evlog[n-maxEventEntries:]...)
+	}
+	s.bufMu.Unlock()
+}
+
+// Outputs returns captured output entries newer than `since` (zero-time = all).
+// If tail > 0, only the last `tail` entries are returned.
+func (s *Session) Outputs(since time.Time, tail int) []OutputEntry {
+	s.bufMu.Lock()
+	defer s.bufMu.Unlock()
+	out := make([]OutputEntry, 0, len(s.outputs))
+	for _, e := range s.outputs {
+		if !since.IsZero() && !e.TS.After(since) {
+			continue
+		}
+		out = append(out, e)
+	}
+	if tail > 0 && len(out) > tail {
+		out = out[len(out)-tail:]
+	}
+	return out
+}
+
+// Events returns captured event log entries with the same filtering.
+func (s *Session) Events(since time.Time, tail int) []LoggedEvent {
+	s.bufMu.Lock()
+	defer s.bufMu.Unlock()
+	out := make([]LoggedEvent, 0, len(s.evlog))
+	for _, e := range s.evlog {
+		if !since.IsZero() && !e.TS.After(since) {
+			continue
+		}
+		out = append(out, e)
+	}
+	if tail > 0 && len(out) > tail {
+		out = out[len(out)-tail:]
+	}
+	return out
+}
+
+// ----- watch list -----
+
+func (s *Session) AddWatch(expr string) *Watch {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	s.watchNextID++
+	w := &Watch{ID: s.watchNextID, Expression: expr}
+	s.watches = append(s.watches, w)
+	return w
+}
+
+func (s *Session) RemoveWatch(id int) bool {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	for i, w := range s.watches {
+		if w.ID == id {
+			s.watches = append(s.watches[:i], s.watches[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) ClearWatches() {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	s.watches = nil
+}
+
+func (s *Session) Watches() []*Watch {
+	s.watchMu.Lock()
+	defer s.watchMu.Unlock()
+	out := make([]*Watch, len(s.watches))
+	copy(out, s.watches)
+	return out
+}
+
+// ----- function BP / exception filter helpers -----
+
+func (s *Session) PutFuncBP(b FuncBP) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.funcBPs = append(s.funcBPs, b)
+}
+
+func (s *Session) FuncBPs() []FuncBP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]FuncBP, len(s.funcBPs))
+	copy(out, s.funcBPs)
+	return out
+}
+
+func (s *Session) RemoveFuncBPByID(id int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i, b := range s.funcBPs {
+		if b.LocalID == id {
+			s.funcBPs = append(s.funcBPs[:i], s.funcBPs[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Session) SetExcFilters(f []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.excFilters = append([]string(nil), f...)
+}
+
+func (s *Session) ExcFilters() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.excFilters...)
+}
+
+// AllBPsForFiles groups all source BPs by file.
+func (s *Session) AllBPsForFiles() map[string][]*BP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string][]*BP{}
+	for _, b := range s.bpsByID {
+		out[b.File] = append(out[b.File], b)
+	}
+	return out
+}
+
+// clearOnceBPs removes the named breakpoints from the session and re-syncs
+// each affected source file with the adapter so the BP no longer fires.
+func (s *Session) clearOnceBPs(ids []int) {
+	files := map[string]struct{}{}
+	for _, id := range ids {
+		if b, ok := s.RemoveBP(id); ok {
+			files[b.File] = struct{}{}
+		}
+	}
+	for f := range files {
+		bps := s.BPsForFile(f)
+		dapBPs := make([]godap.SourceBreakpoint, 0, len(bps))
+		for _, b := range bps {
+			sb := godap.SourceBreakpoint{Line: b.Line}
+			if b.Condition != "" {
+				sb.Condition = b.Condition
+			}
+			if b.HitCond != "" {
+				sb.HitCondition = b.HitCond
+			}
+			if b.LogMsg != "" {
+				sb.LogMessage = b.LogMsg
+			}
+			dapBPs = append(dapBPs, sb)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_, _ = s.cli.SetBreakpoints(ctx, godap.Source{Path: f}, dapBPs)
+		cancel()
+	}
 }
 
 // ----- stdio bridge -----

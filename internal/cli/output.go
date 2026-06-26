@@ -15,16 +15,17 @@ func emit(data interface{}) {
 	if gFlags.Quiet {
 		return
 	}
-	resp := api.Response{OK: true, Data: data, TS: time.Now().UTC()}
+	resp := api.Response{Schema: api.SchemaVersion, OK: true, Data: data, TS: time.Now().UTC()}
 	writeJSON(resp)
 }
 
 // emitErr prints an error response to stdout (still structured) and stderr.
 func emitErr(code, msg, hint string) {
 	resp := api.Response{
-		OK:    false,
-		Error: &api.Error{Code: code, Message: msg, Hint: hint},
-		TS:    time.Now().UTC(),
+		Schema: api.SchemaVersion,
+		OK:     false,
+		Error:  &api.Error{Code: code, Message: msg, Hint: hint},
+		TS:     time.Now().UTC(),
 	}
 	writeJSON(resp)
 }

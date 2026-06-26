@@ -87,6 +87,7 @@ See https://github.com/yogeshpatil/sl-dbg for full documentation.`,
 	root.AddCommand(newAdaptersCmd())
 	root.AddCommand(newInstallAdapterCmd())
 	root.AddCommand(newDaemonCmd())
+	root.AddCommand(newLogsCmd())
 	root.AddCommand(newMCPCmd())
 
 	return root
