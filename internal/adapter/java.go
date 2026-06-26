@@ -34,19 +34,19 @@ func init() {
 			}
 			return jar, nil
 		},
-		LaunchAdapter: func() ([]string, string, error) {
+		LaunchAdapter: func() ([]string, Transport, error) {
 			jar := javaDebugJarPath()
 			if jar == "" {
-				return nil, "", fmt.Errorf("java-debug jar not configured (set SL_DBG_JAVA_DEBUG_JAR)")
+				return nil, TransportStdio, fmt.Errorf("java-debug jar not configured (set SL_DBG_JAVA_DEBUG_JAR)")
 			}
 			java, err := exec.LookPath("java")
 			if err != nil {
-				return nil, "", err
+				return nil, TransportStdio, err
 			}
 			return []string{
 				java, "-cp", jar,
 				"com.microsoft.java.debug.core.adapter.JdiDebugAdapter",
-			}, "stdio", nil
+			}, TransportStdio, nil
 		},
 		BuildLaunchArgs: func(cfg LaunchCfg) (map[string]interface{}, error) {
 			if cfg.MainClass == "" {

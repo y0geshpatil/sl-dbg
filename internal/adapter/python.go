@@ -24,15 +24,15 @@ func init() {
 			}
 			return py, nil
 		},
-		LaunchAdapter: func() ([]string, string, error) {
+		LaunchAdapter: func() ([]string, Transport, error) {
 			py, err := exec.LookPath("python3")
 			if err != nil {
 				py, err = exec.LookPath("python")
 				if err != nil {
-					return nil, "", err
+					return nil, TransportStdio, err
 				}
 			}
-			return []string{py, "-m", "debugpy.adapter"}, "stdio", nil
+			return []string{py, "-m", "debugpy.adapter"}, TransportStdio, nil
 		},
 		BuildLaunchArgs: func(cfg LaunchCfg) (map[string]interface{}, error) {
 			if cfg.Program == "" {

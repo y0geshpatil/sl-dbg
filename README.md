@@ -17,6 +17,18 @@ sl-dbg stop
 
 That's it. No REPL. No protocol. Just commands.
 
+## Status (v0.1)
+
+| Language | Adapter | Install (smooth) | E2E verified |
+|---|---|---|---|
+| Python | `debugpy` (Microsoft) | `pip install --user debugpy` | ✅ |
+| Go | `dlv dap` (Delve) | `go install github.com/go-delve/delve/cmd/dlv@latest` | ✅ |
+| Java | `java-debug` (Microsoft) | ⚠️ Phase 2 — needs sl-dbg-published prebuilt jar (`sl-dbg install-adapter java`). Code & sample are in place; live test deferred. | ⏳ |
+| Node.js, Rust, C/C++, .NET | planned | each lands via `sl-dbg install-adapter <lang>` downloading a published binary | ⏳ |
+
+### Why is Java different?
+Of all mainstream languages, Java is the **only** one whose official DAP adapter (Microsoft's `java-debug`) does not ship as a standalone runnable. It's an OSGi bundle meant to be loaded inside Eclipse JDT-LS. The clean fix — implemented like every other professional DAP tool (CodeLLDB, netcoredbg, Delve) — is for the `sl-dbg` project to publish a small Java launcher fat-jar via GitHub Releases, fetched on demand by `sl-dbg install-adapter java`. That work is tracked in `ROADMAP.md`. No user-facing build-from-source step.
+
 ## Why?
 
 | Use case | Why sl-dbg |

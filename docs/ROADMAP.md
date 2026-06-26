@@ -17,7 +17,56 @@ This roadmap is **phased and incremental**. Each phase produces a working tool; 
 
 ---
 
-## Phase 1 — Python MVP (debugpy) 🎯
+## Phase 1 — Python MVP (debugpy) ✅ DONE
+
+**Goal:** Debug a Python program end-to-end with the core commands.
+
+- [x] DAP client wrapper (`internal/dap`) over `github.com/google/go-dap`
+- [x] Daemon (`sl-dbg daemon serve`) with Unix-socket IPC, auto-spawned by CLI
+- [x] Adapter registry with python entry (debugpy)
+- [x] Commands: `start`, `attach`, `break --if`, `breaks`, `unbreak`, `continue`,
+      `step`, `next`, `finish`, `pause`, `state`, `stack`, `threads`, `locals`,
+      `eval`, `set`, `snapshot`, `sessions`, `use`, `stop`, `adapters`
+- [x] Verified live against `examples/python/buggy.py`
+
+## Phase 1.5 — Go via Delve ✅ DONE
+
+- [x] TCP-listen transport in adapter framework (auto picks free port)
+- [x] `dlv dap` adapter wired with `--listen=127.0.0.1:{PORT}`
+- [x] Verified live against `examples/go/buggy.go`
+
+## Phase 2 — Java the right way (no source build for users)
+
+**Goal:** `sl-dbg install-adapter java` becomes one command, downloads a
+prebuilt fat-jar, and Java debugging just works — same UX as Python's
+`pip install debugpy`.
+
+- [ ] Add `adapters/java-launcher/` Maven project in this repo: a thin main
+      class that instantiates `com.microsoft.java.debug.core.adapter.JdiDebugAdapter`
+      and bridges stdio↔DAP. Dependencies (java-debug-core, rxjava, gson,
+      commons-io) bundled via maven-shade-plugin into one fat jar.
+- [ ] CI release workflow: on tag, `mvn package` and attach the jar as a
+      GitHub Release asset (`sl-dbg-java-adapter-<ver>.jar`).
+- [ ] Implement `sl-dbg install-adapter <lang>`: curl-downloads the asset
+      to `~/.cache/sl-dbg/adapters/`.
+- [ ] Live e2e against `examples/java/Buggy.java` (attach mode using JDWP).
+
+**Why not source-build today:** Microsoft's `java-debug` is shipped as an
+OSGi bundle for Eclipse JDT-LS. To use it standalone we need a launcher
+class + dependency-shading. That's a sl-dbg-maintainer concern, not an
+end-user concern. End users see only `sl-dbg install-adapter java`.
+
+## Phase 3 — More adapters via `install-adapter`
+
+Each follows the same install-adapter pattern (download a prebuilt
+upstream binary into `~/.cache/sl-dbg/adapters/`):
+
+- [ ] Node.js — `vscode-js-debug` (Microsoft, npm)
+- [ ] Rust / C / C++ — `codelldb` (LLVM, GitHub Releases) or `lldb-dap`
+- [ ] .NET — `netcoredbg` (Samsung, GitHub Releases)
+- [ ] Ruby — `rdbg` (`gem install debug`)
+
+## Phase 1 (original) — Python MVP — superseded
 
 **Goal:** Debug a Python program end-to-end with the core commands.
 

@@ -7,6 +7,18 @@ import (
 	"fmt"
 )
 
+// Transport identifies how the adapter speaks DAP.
+type Transport int
+
+const (
+	// TransportStdio: argv binary speaks DAP over its stdin/stdout (e.g. debugpy.adapter).
+	TransportStdio Transport = iota
+	// TransportTCPListen: argv contains a "{PORT}" placeholder. sl-dbg picks a free
+	// local port, substitutes it, spawns the process, then dials TCP localhost:port
+	// once it accepts. Used by `dlv dap --listen=127.0.0.1:{PORT}`.
+	TransportTCPListen
+)
+
 // Spec describes one language's DAP adapter.
 type Spec struct {
 	// Lang is the user-facing language id ("python", "java", "go", ...).
@@ -16,9 +28,10 @@ type Spec struct {
 	// Detect returns nil if the adapter binary is available on the system.
 	// path is the resolved binary or jar path (empty if Detect fails).
 	Detect func() (path string, err error)
-	// LaunchAdapter returns the argv to spawn the adapter process and the
-	// transport mode it speaks ("stdio" or "tcp:<port>").
-	LaunchAdapter func() (argv []string, transport string, err error)
+	// LaunchAdapter returns the argv to spawn the adapter process and its
+	// transport mode. For TransportTCPListen, argv may contain "{PORT}" tokens
+	// that sl-dbg substitutes with a free local port before exec.
+	LaunchAdapter func() (argv []string, transport Transport, err error)
 	// BuildLaunchArgs builds the DAP-level `launch` request arguments for
 	// starting a fresh target.
 	BuildLaunchArgs func(cfg LaunchCfg) (map[string]interface{}, error)

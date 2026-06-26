@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
@@ -330,10 +331,19 @@ func (m *Manager) startAdapter(ctx context.Context, spec adapter.Spec, lang stri
 	if err != nil {
 		return nil, err
 	}
-	if transport != "stdio" {
-		return nil, fmt.Errorf("transport %q not yet supported (stdio only for now)", transport)
-	}
 
+	switch transport {
+	case adapter.TransportStdio:
+		return m.startAdapterStdio(spec, argv, lang)
+	case adapter.TransportTCPListen:
+		return m.startAdapterTCP(spec, argv, lang)
+	default:
+		return nil, fmt.Errorf("unknown transport %v", transport)
+	}
+}
+
+// startAdapterStdio spawns argv and bridges its stdin/stdout to the DAP client.
+func (m *Manager) startAdapterStdio(_ adapter.Spec, argv []string, lang string) (*Session, error) {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -343,33 +353,67 @@ func (m *Manager) startAdapter(ctx context.Context, spec adapter.Spec, lang stri
 	if err != nil {
 		return nil, err
 	}
-	// Drain stderr to /dev/null-ish; in production we'd log it.
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		// Capture adapter stderr to a per-user log file for postmortem debugging.
-		logPath := os.Getenv("SL_DBG_ADAPTER_LOG")
-		if logPath == "" {
-			logPath = "/tmp/sl-dbg-adapter.log"
-		}
-		f, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-		if f == nil {
-			_, _ = io.Copy(io.Discard, stderr)
-			return
-		}
-		defer f.Close()
-		_, _ = io.Copy(f, stderr)
-	}()
+	go drainStderr(stderr)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start adapter %q: %w", strings.Join(argv, " "), err)
 	}
 
 	cli := dap.New(&stdioRWC{r: stdout, w: stdin, proc: cmd})
+	return newSession(cli, cmd, lang), nil
+}
 
-	s := &Session{
+// startAdapterTCP picks a free local port, substitutes {PORT} in argv, spawns
+// the adapter, waits for the port to accept, then dials it.
+func (m *Manager) startAdapterTCP(_ adapter.Spec, argvTpl []string, lang string) (*Session, error) {
+	port, err := pickFreePort()
+	if err != nil {
+		return nil, fmt.Errorf("pick free port: %w", err)
+	}
+	argv := make([]string, len(argvTpl))
+	for i, a := range argvTpl {
+		argv[i] = strings.ReplaceAll(a, "{PORT}", fmt.Sprintf("%d", port))
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	go drainStderr(stderr)
+	// dlv writes to stdout (its banner); drain it.
+	cmd.Stdout = io.Discard
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start adapter %q: %w", strings.Join(argv, " "), err)
+	}
+
+	// Wait up to 5s for the adapter to start accepting connections.
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	var conn net.Conn
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err = net.DialTimeout("tcp", addr, 250*time.Millisecond)
+		if err == nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if conn == nil {
+		_ = cmd.Process.Kill()
+		return nil, fmt.Errorf("adapter %s did not accept TCP on %s within 5s: %v", argv[0], addr, err)
+	}
+
+	cli := dap.NewFromConn(conn)
+	return newSession(cli, cmd, lang), nil
+}
+
+func newSession(cli *dap.Client, cmd *exec.Cmd, lang string) *Session {
+	return &Session{
 		ID:            newID(),
 		Lang:          lang,
 		state:         StateInitializing,
@@ -379,7 +423,30 @@ func (m *Manager) startAdapter(ctx context.Context, spec adapter.Spec, lang stri
 		proc:          cmd,
 		doneCh:        make(chan struct{}),
 	}
-	return s, nil
+}
+
+func pickFreePort() (int, error) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	_ = l.Close()
+	return port, nil
+}
+
+func drainStderr(r io.Reader) {
+	logPath := os.Getenv("SL_DBG_ADAPTER_LOG")
+	if logPath == "" {
+		logPath = "/tmp/sl-dbg-adapter.log"
+	}
+	f, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if f == nil {
+		_, _ = io.Copy(io.Discard, r)
+		return
+	}
+	defer f.Close()
+	_, _ = io.Copy(f, r)
 }
 
 func (m *Manager) register(s *Session) {

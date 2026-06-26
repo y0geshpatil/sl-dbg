@@ -26,3 +26,4 @@ coverage.*
 
 # Vendor (we use modules; vendor only if explicitly enabled)
 /vendor/
+__debug_bin*
