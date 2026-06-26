@@ -370,8 +370,28 @@ func (s *Server) handleBreaks(req proto.Request) proto.Response {
 	}
 	var out proto.BreaksResult
 	for _, b := range sess.AllBPs() {
+		reason := ""
+		if !b.Verified {
+			reason = "pending (class not yet loaded, or unsupported line)"
+		}
 		out.Breakpoints = append(out.Breakpoints, proto.BreakResult{
-			ID: b.LocalID, Verified: b.Verified, File: b.File, Line: b.Line, Condition: b.Condition,
+			ID: b.LocalID, Verified: b.Verified, File: b.File, Line: b.Line,
+			Condition: b.Condition, Reason: reason,
+		})
+	}
+	for _, b := range sess.FuncBPs() {
+		reason := ""
+		if !b.Verified {
+			reason = "pending (function/class not yet loaded)"
+		}
+		out.Breakpoints = append(out.Breakpoints, proto.BreakResult{
+			ID: b.LocalID, Verified: b.Verified, Function: b.Name,
+			Condition: b.Condition, Reason: reason,
+		})
+	}
+	if filters := sess.ExcFilters(); len(filters) > 0 {
+		out.Breakpoints = append(out.Breakpoints, proto.BreakResult{
+			Verified: true, Reason: "exception: " + strings.Join(filters, ","),
 		})
 	}
 	return ok(out)
@@ -691,11 +711,49 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 		if ctx.Err() == context.DeadlineExceeded {
 			return errResp("TIMEOUT", "evaluation exceeded timeout", "increase --timeout or simplify the expression")
 		}
+		// Auto-qualify static fields for Java: if the error looks like an
+		// unresolved identifier and we have a declaring class, retry as
+		// `ClassName.<expr>` once. This makes `eval globalCounter` work
+		// from inside a method without forcing the caller to know the FQN.
+		if sess.Lang == "java" && looksLikeNameUnknown(err.Error()) && isSimpleIdentifier(args.Expression) {
+			if cls := javaClassFromFrame(ctx, sess, args.Frame); cls != "" {
+				qualified := cls + "." + args.Expression
+				if r2, err2 := sess.Client().Evaluate(ctx, qualified, frameID, context_); err2 == nil {
+					return ok(proto.EvalResult{
+						Result: r2.Body.Result, Type: r2.Body.Type, Ref: r2.Body.VariablesReference,
+					})
+				}
+			}
+		}
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	return ok(proto.EvalResult{
 		Result: r.Body.Result, Type: r.Body.Type, Ref: r.Body.VariablesReference,
 	})
+}
+
+func looksLikeNameUnknown(s string) bool {
+	s = strings.ToLower(s)
+	return strings.Contains(s, "name unknown") ||
+		strings.Contains(s, "cannot find symbol") ||
+		strings.Contains(s, "cannot resolve")
+}
+
+func isSimpleIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, c := range s {
+		if c == '_' || c == '$' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') {
+			continue
+		}
+		if i > 0 && c >= '0' && c <= '9' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Response {

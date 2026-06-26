@@ -308,7 +308,12 @@ func newWatchCmd() *cobra.Command {
   sl-dbg watch              # list current watches with values
   sl-dbg watch --remove 2
   sl-dbg watch --remove-all`,
-		RunE: func(_ *cobra.Command, _ []string) error {
+		RunE: func(_ *cobra.Command, posArgs []string) error {
+			// Reject positional args — earlier UX let `watch add "expr"`
+			// silently behave like `watch` (list) which was confusing.
+			if len(posArgs) > 0 {
+				return Usage("watch takes no positional args; use --add <expr>, --remove <id>, --remove-all, or no flags to list")
+			}
 			args := proto.WatchArgs{Frame: frame}
 			switch {
 			case addExpr != "":

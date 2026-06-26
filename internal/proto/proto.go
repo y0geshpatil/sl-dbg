@@ -212,8 +212,8 @@ type AttachArgs struct {
 
 type SessionResult struct {
 	SessionID string `json:"session"`
-	Lang      string `json:"lang"`
-	State     string `json:"state"`
+	Lang      string `json:"lang,omitempty"`
+	State     string `json:"state,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Location  *Loc   `json:"location,omitempty"`
 }

@@ -112,11 +112,29 @@ func (s *Server) handleGlobals(ctx context.Context, req proto.Request) proto.Res
 	}
 	if ref == 0 {
 		out := proto.LocalsResult{Scope: "Globals"}
-		// Java doesn't expose globals as a scope. Derive the declaring class
-		// from the current frame name (e.g. "com.foo.Bar.method(int)") and
-		// give the user/agent a copy-pasteable hint.
+		// Java doesn't expose globals as a scope. Try to populate it by
+		// evaluating the bare class name — java-debug returns an object
+		// whose variablesReference enumerates the static fields.
 		if sess.Lang == "java" {
-			if cls := javaClassFromFrame(ctx, sess, args.Frame); cls != "" {
+			cls := javaClassFromFrame(ctx, sess, args.Frame)
+			if cls != "" {
+				if r, err := sess.Client().Evaluate(ctx, cls, frameID, "repl"); err == nil && r.Body.VariablesReference > 0 {
+					vars, verr := sess.Client().Variables(ctx, r.Body.VariablesReference)
+					if verr == nil {
+						out.Scope = cls + " (statics)"
+						for _, v := range vars.Body.Variables {
+							// Java reflection includes some pseudo-entries like
+							// "static" headers; keep them — they're harmless.
+							out.Vars = append(out.Vars, proto.Var{
+								Name: v.Name, Value: v.Value, Type: v.Type,
+								Ref: v.VariablesReference, Expandable: v.VariablesReference > 0,
+							})
+						}
+						if len(out.Vars) > 0 {
+							return ok(out)
+						}
+					}
+				}
 				out.Hint = "Java doesn't expose globals as a scope. Inspect statics with: eval " + cls + ".<fieldName>  (or: eval " + cls + ".class.getDeclaredFields())"
 			} else {
 				out.Hint = "Java doesn't expose globals as a scope. Use 'eval <ClassName>.<fieldName>' to read static fields."
