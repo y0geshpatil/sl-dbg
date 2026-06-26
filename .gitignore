@@ -31,3 +31,4 @@ __debug_bin*
 # Java launcher build output
 adapters/java-launcher/target/
 
+dist/
