@@ -547,10 +547,69 @@ var toolRegistry = []Tool{
 	{
 		Name:        "debug_stack",
 		Description: "Return the current call stack.",
+		InputSchema: objectSchema(nil, map[string]interface{}{
+			"thread": intProp("thread id (default: current)"),
+			"limit":  intProp("max frames to return (default: 20)"),
+		}),
+		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
+			sess, rest, _ := extractSession(raw)
+			var a proto.StackArgs
+			_ = json.Unmarshal(rest, &a)
+			return proto.CmdStack, sess, a, nil
+		},
+	},
+	{
+		Name:        "debug_threads",
+		Description: "List all threads in the target process.",
 		InputSchema: objectSchema(nil, map[string]interface{}{}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, _, _ := extractSession(raw)
-			return proto.CmdStack, sess, proto.StackArgs{}, nil
+			return proto.CmdThreads, sess, nil, nil
+		},
+	},
+	{
+		Name:        "debug_breaks",
+		Description: "List all breakpoints (line, function, and exception).",
+		InputSchema: objectSchema(nil, map[string]interface{}{}),
+		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
+			sess, _, _ := extractSession(raw)
+			return proto.CmdBreaks, sess, nil, nil
+		},
+	},
+	{
+		Name:        "debug_unbreak",
+		Mutating:    true,
+		Description: "Remove one or more breakpoints by id; or all of them.",
+		InputSchema: objectSchema(nil, map[string]interface{}{
+			"ids": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "integer"}, "description": "breakpoint ids to remove"},
+			"all": boolProp("remove every breakpoint in the session"),
+		}),
+		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
+			sess, rest, _ := extractSession(raw)
+			var a proto.UnbreakArgs
+			_ = json.Unmarshal(rest, &a)
+			return proto.CmdUnbreak, sess, a, nil
+		},
+	},
+	{
+		Name:        "debug_set",
+		Mutating:    true,
+		Description: "Mutate a local variable in the current (or specified) frame.",
+		InputSchema: objectSchema([]string{"name", "value"}, map[string]interface{}{
+			"name":  stringProp("variable name as shown in debug_locals"),
+			"value": stringProp("new value, expressed in the target language's syntax (e.g. '42', '\"hi\"', 'true')"),
+			"frame": intProp("frame index (0 = top)"),
+		}),
+		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
+			sess, rest, err := extractSession(raw)
+			if err != nil {
+				return "", "", nil, err
+			}
+			var a proto.SetVarArgs
+			if err := json.Unmarshal(rest, &a); err != nil {
+				return "", "", nil, err
+			}
+			return proto.CmdSet, sess, a, nil
 		},
 	},
 	{
