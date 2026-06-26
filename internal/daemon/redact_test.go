@@ -46,3 +46,45 @@ func TestRedactEmptyAndBinary(t *testing.T) {
 		t.Errorf("unparseable args should be flagged")
 	}
 }
+
+// --- adapterErr / cleanAdapterMessage tests (issue #7) ---
+
+func TestCleanAdapterMessageStripsDapPrefix(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"dap error: Cannot evaluate because of java.lang.RuntimeException: / by zero.", "/ by zero"},
+		{"dap error: Cannot evaluate because of java.lang.NullPointerException: Cannot access field of primitive type: null.", "Cannot access field of primitive type: null"},
+		{"Name unknown: globalCounter", "Name unknown: globalCounter"},
+		{"plain message", "plain message"},
+	}
+	for _, c := range cases {
+		got := cleanAdapterMessage(c.in)
+		if got != c.want {
+			t.Errorf("cleanAdapterMessage(%q): got %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestAdapterErrTaxonomy(t *testing.T) {
+	cases := []struct {
+		err  string
+		code string
+	}{
+		{"dap error: Cannot evaluate because of java.lang.ArithmeticException: / by zero", "EVAL_RUNTIME_EXCEPTION"},
+		{"java.lang.NullPointerException: Cannot access field of primitive type: null", "EVAL_RUNTIME_EXCEPTION"},
+		{"java.lang.ClassCastException: cannot cast X to Y", "EVAL_RUNTIME_EXCEPTION"},
+		{"Cannot find symbol: foo", "EVAL_SYNTAX_ERROR"},
+		{"unrelated random thing", "ADAPTER_FAILED"},
+	}
+	for _, c := range cases {
+		resp := adapterErr(errFromString(c.err), "eval")
+		if resp.Error == nil || resp.Error.Code != c.code {
+			t.Errorf("adapterErr(%q): code=%v, want %s", c.err, resp.Error, c.code)
+		}
+	}
+}
+
+type stringErr string
+
+func (s stringErr) Error() string { return string(s) }
+
+func errFromString(s string) error { return stringErr(s) }

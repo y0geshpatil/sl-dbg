@@ -74,7 +74,7 @@ The MCP server ships pre-baked composites that collapse common multi-step flows 
 |---|---|
 | `debug_run_until_break` | start (or attach) → set breakpoint → continue → return pause snapshot |
 | `debug_inspect_at` | set BP → run to it → snapshot locals + evaluate a list of expressions → continue. Short-circuits with `BREAKPOINT_UNVERIFIED` (line has no executable code / class not loaded) or `INSPECT_NOT_PAUSED` (program exited / timed out before hitting the BP) — in either case `locals`/`evaluations` are omitted rather than returning misleading "no frames in current stack" errors. |
-| `debug_explain_pause` | return a one-paragraph English summary of where the program paused, what changed, which watches moved |
+| `debug_explain_pause` | return a one-paragraph English summary of where the program paused, what changed, which watches moved. When the session has exited/terminated/is still running, returns the matching one-liner instead of fabricating a pause — agents won't try follow-up ops on a dead session. |
 | `debug_snapshot_compact` | snapshot capped at N vars per scope; token-budget aware |
 
 ## Patterns

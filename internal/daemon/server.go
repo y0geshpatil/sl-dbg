@@ -261,21 +261,49 @@ func (s *Server) handleStart(ctx context.Context, req proto.Request) proto.Respo
 	})
 }
 
-// earlyTerminationResp formats a launch failure (program died before user
-// could issue any command) as an actionable LAUNCH_FAILED error with the
-// captured exit code and recent stderr so callers don't have to dig through
-// the event log. The dead session is removed from the manager.
+// earlyTerminationResp handles a session that terminated before the caller
+// could issue any commands. Two outcomes:
+//   - exit code 0 → success (state=exited): the program ran cleanly to
+//     completion in under our 1.5s settle window. Not a failure. Issue #2.
+//   - non-zero exit / no exit code (terminated abnormally) → LAUNCH_FAILED
+//     with the captured stdout/stderr so the caller knows why.
+//
+// In both cases the session is removed because nothing more can be done with it.
 func (s *Server) earlyTerminationResp(sess *session.Session, pi proto.PauseInfo) proto.Response {
-	tail := sess.RecentStderrTail(2048)
-	hint := "check program path, main class, classpath, and required env vars"
+	stdoutTail := sess.RecentStdoutTail(2048)
+	stderrTail := sess.RecentStderrTail(2048)
+	defer s.mgr.Remove(sess.ID)
+
+	if pi.ExitCode != nil && *pi.ExitCode == 0 {
+		// Clean exit: report as success so callers don't have to special-case
+		// short-running programs. They can still grab the captured output.
+		return ok(proto.SessionResult{
+			SessionID: sess.ID,
+			Lang:      sess.Lang,
+			State:     string(session.StateExited),
+			Reason:    "exited",
+			ExitCode:  pi.ExitCode,
+			Stdout:    stdoutTail,
+			Stderr:    stderrTail,
+		})
+	}
+
 	msg := "program terminated before any user command could run"
 	if pi.ExitCode != nil {
 		msg = fmt.Sprintf("program exited with code %d before any user command could run", *pi.ExitCode)
 	}
-	if tail != "" {
-		hint = "stderr tail:\n" + strings.TrimRight(tail, "\n")
+	hint := "check program path, main class, classpath, and required env vars"
+	// Build a labeled tail so we never call stdout "stderr" again (issue #2).
+	var tailParts []string
+	if stderrTail != "" {
+		tailParts = append(tailParts, "stderr tail:\n"+strings.TrimRight(stderrTail, "\n"))
 	}
-	s.mgr.Remove(sess.ID)
+	if stdoutTail != "" {
+		tailParts = append(tailParts, "stdout tail:\n"+strings.TrimRight(stdoutTail, "\n"))
+	}
+	if len(tailParts) > 0 {
+		hint = strings.Join(tailParts, "\n\n")
+	}
 	return errResp("LAUNCH_FAILED", msg, hint)
 }
 
@@ -522,7 +550,9 @@ func (s *Server) handleBreaks(req proto.Request) proto.Response {
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
-	var out proto.BreaksResult
+	// Initialize as empty slice — never return null. Issue #12: agents iterate
+	// the array, and `null` forces them to special-case the empty-list path.
+	out := proto.BreaksResult{Breakpoints: []proto.BreakResult{}}
 	for _, b := range sess.AllBPs() {
 		reason := ""
 		if !b.Verified {
@@ -572,7 +602,8 @@ func (s *Server) handleUnbreak(ctx context.Context, req proto.Request) proto.Res
 		touchedFiles[b.File] = true
 	}
 
-	var removed []int
+	// Issue #14: always return an array, even when nothing matched.
+	removed := []int{}
 	if args.All {
 		for _, b := range beforeRemove {
 			sess.RemoveBP(b.LocalID)
@@ -702,6 +733,24 @@ func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Respo
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+	}
+	// Issue #10: if the session has already exited/terminated, don't bother
+	// the adapter and don't wait 10s. Surface the terminal state immediately.
+	switch sess.State() {
+	case session.StateExited, session.StateTerminated:
+		pi := proto.PauseInfo{State: string(sess.State()), Reason: "already " + string(sess.State())}
+		if ec := sess.ExitCode(); ec != nil {
+			pi.ExitCode = ec
+		}
+		return ok(pi)
+	case session.StatePaused:
+		// Already paused — nothing to do; return current state instead of
+		// trying to pause a non-running target.
+		reason, hitBP, loc := sess.LastPause()
+		return ok(proto.PauseInfo{
+			State: string(sess.State()), Reason: reason, Thread: sess.CurrentThread(),
+			Location: loc, HitBP: hitBP,
+		})
 	}
 	if err := sess.EnsureConfigurationDone(ctx); err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
@@ -861,6 +910,13 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	var args proto.EvalArgs
 	if err := unmarshalArgs(req.Args, &args); err != nil {
 		return errResp("USAGE_ERROR", err.Error(), "")
+	}
+	// Issue #16: reject empty/whitespace expressions up front instead of
+	// passing them to the adapter (which returns the misleading "no frames
+	// in current stack").
+	if strings.TrimSpace(args.Expression) == "" {
+		return errResp("USAGE_ERROR", "expression is empty",
+			"pass a non-empty Java/Python/Go expression, e.g. `eval x + 1`")
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
@@ -1115,6 +1171,10 @@ func adapterErr(err error, op string) proto.Response {
 	}
 	msg := err.Error()
 	low := strings.ToLower(msg)
+	// Issue #7: strip noisy java-debug wrappers so we don't leak the DAP/JDI
+	// pipeline into user-facing errors. Keep the original text in `data` for
+	// debuggability.
+	cleaned := cleanAdapterMessage(msg)
 	switch {
 	case strings.Contains(msg, "AbsentInformationException"):
 		return errResp("MISSING_DEBUG_INFO", op+": class compiled without debug info",
@@ -1123,7 +1183,7 @@ func adapterErr(err error, op string) proto.Response {
 		return errResp("EVAL_NO_THIS", op+": cannot evaluate `this` in a static or native frame",
 			"Qualify static fields with ClassName.field, or step into a non-static frame first.")
 	case strings.Contains(msg, "Name unknown"):
-		return errResp("EVAL_NAME_UNKNOWN", msg,
+		return errResp("EVAL_NAME_UNKNOWN", op+": "+cleaned,
 			"Variable not in scope. For static fields use ClassName.field; for outer-class fields use Outer.this.field.")
 	case strings.Contains(msg, "ClassNotLoadedException"), strings.Contains(low, "class not prepared"):
 		return errResp("CLASS_NOT_LOADED", op+": target class not yet loaded by the JVM",
@@ -1133,8 +1193,51 @@ func adapterErr(err error, op string) proto.Response {
 			"The program resumed; re-fetch the stack and retry.")
 	case strings.Contains(msg, "VMDisconnectedException"), strings.Contains(low, "debuggee vm has terminated"):
 		return errResp("VM_DISCONNECTED", op+": debuggee VM has terminated", "Start a new session.")
+	case strings.Contains(low, "/ by zero"), strings.Contains(low, "arithmeticexception"):
+		return errResp("EVAL_RUNTIME_EXCEPTION", op+": ArithmeticException: "+cleaned,
+			"Guard against zero divisors before evaluating.")
+	case strings.Contains(low, "nullpointerexception"), strings.Contains(low, "cannot access field of primitive type: null"):
+		return errResp("EVAL_RUNTIME_EXCEPTION", op+": NullPointerException: "+cleaned,
+			"Check that the receiver is non-null before dereferencing.")
+	case strings.Contains(low, "classcastexception"):
+		return errResp("EVAL_RUNTIME_EXCEPTION", op+": ClassCastException: "+cleaned,
+			"Verify the runtime type before casting (use instanceof first).")
+	case strings.Contains(low, "syntax error"), strings.Contains(low, "cannot find symbol"),
+		strings.Contains(low, "parse error"):
+		return errResp("EVAL_SYNTAX_ERROR", op+": "+cleaned, "Check the expression syntax.")
 	case strings.Contains(low, "timeout"):
-		return errResp("TIMEOUT", op+": "+msg, "Increase --timeout or check that the program is making progress.")
+		return errResp("TIMEOUT", op+": "+cleaned, "Increase --timeout or check that the program is making progress.")
+	case strings.Contains(low, "runtimeexception"), strings.Contains(low, "cannot evaluate because of"):
+		return errResp("EVAL_RUNTIME_EXCEPTION", op+": "+cleaned,
+			"The expression evaluated to a runtime exception; see message for details.")
 	}
-	return errResp("ADAPTER_FAILED", op+": "+msg, "")
+	return errResp("ADAPTER_FAILED", op+": "+cleaned, "")
+}
+
+// cleanAdapterMessage strips the noisy java-debug / DAP wrappers from an
+// adapter error string so it reads as a normal sentence. Examples:
+//
+//   dap error: Cannot evaluate because of java.lang.RuntimeException: / by zero.
+//   → / by zero
+//   dap error: Cannot evaluate because of java.lang.NullPointerException: Cannot access field of primitive type: null.
+//   → Cannot access field of primitive type: null
+func cleanAdapterMessage(s string) string {
+	const dapPrefix = "dap error: "
+	const cantEval = "Cannot evaluate because of "
+	s = strings.TrimSpace(s)
+	if i := strings.Index(s, dapPrefix); i >= 0 {
+		s = s[i+len(dapPrefix):]
+	}
+	if i := strings.Index(s, cantEval); i >= 0 {
+		s = s[i+len(cantEval):]
+	}
+	// Strip a leading Java exception class name + colon (e.g.
+	// "java.lang.RuntimeException: / by zero" → "/ by zero").
+	if i := strings.Index(s, ": "); i > 0 {
+		head := s[:i]
+		if strings.Count(head, ".") >= 2 && !strings.ContainsAny(head, " \t\n\"',()") {
+			s = s[i+2:]
+		}
+	}
+	return strings.TrimRight(s, ". \n\t")
 }

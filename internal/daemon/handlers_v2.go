@@ -605,6 +605,14 @@ func (s *Server) handleUntil(ctx context.Context, req proto.Request) proto.Respo
 	if werr != nil {
 		return errResp("TIMEOUT", werr.Error(), "")
 	}
+	// Issue #15: match the shape of continue/next/step/finish — include
+	// the post-pause location so callers don't need a follow-up state call.
+	if info.State == string(session.StatePaused) {
+		if loc := fetchTopLocation(ctx, sess); loc != nil {
+			info.Location = loc
+			sess.SetLastLocation(loc)
+		}
+	}
 	return ok(info)
 }
 

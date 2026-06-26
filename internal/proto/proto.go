@@ -217,6 +217,11 @@ type SessionResult struct {
 	State     string `json:"state,omitempty"`
 	Reason    string `json:"reason,omitempty"`
 	Location  *Loc   `json:"location,omitempty"`
+	// Set on early-exit success (issue #2) so callers see the program output
+	// without a separate `output` round-trip.
+	ExitCode *int   `json:"exitCode,omitempty"`
+	Stdout   string `json:"stdout,omitempty"`
+	Stderr   string `json:"stderr,omitempty"`
 }
 
 type BreakArgs struct {

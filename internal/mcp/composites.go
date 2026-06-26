@@ -242,6 +242,35 @@ func handleExplainPause(s *Server, sess string, raw json.RawMessage) (interface{
 		vars = vars[:a.MaxVars]
 	}
 
+	// Issue #8: when the session isn't paused, the prose summary used to
+	// claim "Paused (...)" anyway. Branch up front so LLM agents don't try
+	// follow-up debug ops against a dead session.
+	switch st.State {
+	case "exited":
+		var ecOnly struct {
+			ExitCode *int `json:"exitCode"`
+		}
+		_ = json.Unmarshal(stateRaw, &ecOnly)
+		ec := ""
+		if ecOnly.ExitCode != nil {
+			ec = fmt.Sprintf(" with code %d", *ecOnly.ExitCode)
+		}
+		return map[string]interface{}{
+			"summary": "Program exited" + ec + "; no active stack frame.",
+			"state":   st,
+		}, nil
+	case "terminated":
+		return map[string]interface{}{
+			"summary": "Session terminated; no active stack frame.",
+			"state":   st,
+		}, nil
+	case "running":
+		return map[string]interface{}{
+			"summary": "Program is running; call debug_pause or wait for a breakpoint to inspect state.",
+			"state":   st,
+		}, nil
+	}
+
 	// Build prose summary.
 	summary := fmt.Sprintf("Paused (%s) at %s:%d in %s.", st.Reason, st.Location.File, st.Location.Line, st.Location.Function)
 	if len(frames) > 1 {

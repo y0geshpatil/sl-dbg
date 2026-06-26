@@ -144,6 +144,31 @@ func TestLangEnumInSchema(t *testing.T) {
 
 // Issue #5: when the bp doesn't verify, inspect_at must not resume — otherwise
 // the program runs to completion and every eval comes back "no frames".
+// Issue #8: explain_pause must not claim "Paused (...)" when the session
+// has actually exited.
+func TestExplainPauseOnExitedSession(t *testing.T) {
+	c := &scriptedCaller{
+		replies: map[string]json.RawMessage{
+			"sessions": json.RawMessage(`{"sessions":[{"id":"s1"}]}`),
+			"state":    json.RawMessage(`{"state":"exited","reason":"exited","exitCode":0}`),
+			"stack":    json.RawMessage(`{"frames":[]}`),
+			"locals":   json.RawMessage(`{"vars":[]}`),
+			"watch":    json.RawMessage(`{"watches":[]}`),
+		},
+	}
+	in := bytes.NewBufferString(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"debug_explain_pause","arguments":{}}}` + "\n")
+	var out bytes.Buffer
+	s := NewServer(in, &out, c)
+	_ = s.Run(context.Background())
+	body := out.String()
+	if strings.Contains(body, `"summary":"Paused`) {
+		t.Errorf("explain_pause claimed Paused for exited session: %s", body)
+	}
+	if !strings.Contains(body, "exited") {
+		t.Errorf("explain_pause summary missing exited marker: %s", body)
+	}
+}
+
 func TestInspectAtShortCircuitsOnUnverifiedBP(t *testing.T) {
 	c := &scriptedCaller{
 		replies: map[string]json.RawMessage{

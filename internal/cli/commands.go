@@ -300,10 +300,10 @@ func newBreakFnCmd() *cobra.Command {
 func newBreakExCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "break-ex <filter>...",
-		Short: "Exception breakpoint (filters: uncaught, raised, or adapter-specific)",
+		Short: "Exception breakpoint (filters: uncaught, caught, or adapter-specific — see `sl-dbg adapters`)",
 		Args:  cobra.MinimumNArgs(1),
 		Example: `  sl-dbg break-ex uncaught
-  sl-dbg break-ex raised uncaught`,
+  sl-dbg break-ex uncaught caught   # Java: stop on both thrown and unhandled`,
 		RunE: func(_ *cobra.Command, a []string) error {
 			return callRaw(proto.CmdBreakEx, gFlags.Session, proto.BreakExArgs{Filters: a})
 		},

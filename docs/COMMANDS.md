@@ -311,3 +311,43 @@ Or on error:
 | 3 | IPC error (daemon down) |
 | 4 | Adapter error |
 | 130 | Interrupted |
+
+## Error Code Taxonomy
+
+`error.code` values are stable identifiers tools can switch on. The set is intentionally small and additive — see [issues](https://github.com/y0geshpatil/sl-dbg/issues) tagged `area/proto` for proposed additions.
+
+| Code | When | Hint |
+|---|---|---|
+| `USAGE_ERROR` | Bad CLI / JSON args (empty expression, missing file, line past EOF) | Validate input |
+| `SESSION_NOT_FOUND` | Session id unknown / already stopped | Call `debug_sessions` |
+| `READ_ONLY_MODE` | Mutating call against `--read-only` session | Start a new mutating session |
+| `LAUNCH_FAILED` | Program died before any user command could run; **only when exit code ≠ 0**. Clean `exit 0` returns `state=exited` as success | Inspect `stderr`/`stdout` tails |
+| `ADAPTER_FAILED` | Generic uncategorised adapter error | Last resort |
+| `MISSING_DEBUG_INFO` | `AbsentInformationException` — class compiled without `-g` | `javac -g` |
+| `CLASS_NOT_LOADED` | BP at a class the JVM hasn't loaded | Set BP earlier |
+| `STALE_FRAME` | Frame invalidated after resume | Re-fetch stack |
+| `VM_DISCONNECTED` | JVM terminated | New session |
+| `EVAL_NO_THIS` | `this` in static/native frame | Use `Class.field` |
+| `EVAL_NAME_UNKNOWN` | Identifier not in scope | Qualify with class |
+| `EVAL_SYNTAX_ERROR` | Expression parse error | Fix syntax |
+| `EVAL_RUNTIME_EXCEPTION` | Expression evaluated to a runtime exception (NPE, divide-by-zero, ClassCast) | Guard the receiver |
+| `BREAKPOINT_UNVERIFIED` | `debug_inspect_at`: BP didn't bind | Pick an executable body line |
+| `INSPECT_NOT_PAUSED` | `debug_inspect_at`: continue ended in exit/timeout, not the requested BP | Confirm reachability |
+| `PAUSE_TIMEOUT` | Adapter accepted pause but did not stop within 10s | Set a line BP and continue instead |
+| `TIMEOUT` | Operation exceeded its `--timeout` | Raise `--timeout` |
+
+## Schema / Versioning Policy
+
+Every JSON response includes a `"schema": "1"` marker. The contract for `schema:"1"`:
+
+1. **Additive only.** New optional fields may appear at any time; existing field names, JSON types, and `error.code` values will not change meaning.
+2. **Removed fields are NOT re-introduced** with a different meaning. If a field is dropped (because the data is no longer accurate, e.g. `location` on an `exited` session), it stays dropped.
+3. **`schema` will bump to `"2"`** only for an intentional breaking change announced ahead in [ROADMAP.md](ROADMAP.md). Tools should pin to a schema and warn on unknown values.
+
+## Adapter Capability Notes
+
+| Adapter | Restart supported | Notes |
+|---|---|---|
+| Java (java-debug) | ❌ no | JDI/JDWP cannot hot-restart a JVM. Use `sl-dbg stop` then `sl-dbg start` with the same args. `debug_restart` returns `UNSUPPORTED_FEATURE`. |
+| Python (debugpy) | ✅ yes | |
+| Go (delve) | ✅ yes | |

@@ -952,6 +952,17 @@ func (s *Session) Outputs(since time.Time, tail int) []OutputEntry {
 // stdout entries concatenated, newest last. Used to enrich LAUNCH_FAILED
 // errors with a snippet of what the doomed program actually said.
 func (s *Session) RecentStderrTail(maxBytes int) string {
+	return s.tailByCategory(maxBytes, "stderr")
+}
+
+// RecentStdoutTail mirrors RecentStderrTail for stdout/console output. Issue
+// #2 — earlyTerminationResp needs to label each tail correctly instead of
+// calling everything "stderr".
+func (s *Session) RecentStdoutTail(maxBytes int) string {
+	return s.tailByCategory(maxBytes, "stdout")
+}
+
+func (s *Session) tailByCategory(maxBytes int, want string) string {
 	s.bufMu.Lock()
 	defer s.bufMu.Unlock()
 	if len(s.outputs) == 0 {
@@ -960,7 +971,13 @@ func (s *Session) RecentStderrTail(maxBytes int) string {
 	var b []byte
 	for i := len(s.outputs) - 1; i >= 0; i-- {
 		e := s.outputs[i]
-		if e.Category != "stderr" && e.Category != "console" && e.Category != "stdout" {
+		// "console" entries are adapter-side notices, not program output —
+		// route them to stderr so they don't pollute the stdout tail.
+		cat := e.Category
+		if cat == "console" {
+			cat = "stderr"
+		}
+		if cat != want {
 			continue
 		}
 		if len(b)+len(e.Output) > maxBytes && len(b) > 0 {
