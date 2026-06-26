@@ -30,16 +30,21 @@ install:
 clean:
 	rm -rf $(BUILD_DIR) dist coverage.* *.out
 
-## test: Run all tests
-test: test-unit
+## test: Run unit + e2e tests
+test: test-unit test-e2e
 
-## test-unit: Run unit tests
+## test-unit: Run Go unit tests
 test-unit:
 	$(GO) test -race -count=1 ./...
 
 ## test-integration: Run integration tests (requires adapters installed)
 test-integration:
 	$(GO) test -tags=integration -race -count=1 ./test/integration/...
+
+## test-e2e: Run end-to-end shell tests against installed adapters
+##           (adapters that aren't installed are skipped, not failed)
+test-e2e: build
+	@bash test/e2e/run-all.sh
 
 ## lint: Run linters
 lint:

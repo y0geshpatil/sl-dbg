@@ -15,14 +15,44 @@ jobs:
         go: ['1.22']
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Install debugpy
+        run: python -m pip install --user debugpy
+
+      - name: Install dlv
+        run: go install github.com/go-delve/delve/cmd/dlv@latest
+
+      - name: Add Go bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
       - name: Build
         run: make build
+
       - name: Vet
         run: make vet
+
       - name: Unit tests
         run: make test-unit
-      - name: Run version
+
+      - name: Build Java adapter
+        run: ./bin/sl-dbg install-adapter java
+
+      - name: E2E tests
+        run: make test-e2e
+
+      - name: Version smoke
         run: ./bin/sl-dbg version
+
