@@ -258,6 +258,7 @@ type Var struct {
 type LocalsResult struct {
 	Scope string `json:"scope"`
 	Vars  []Var  `json:"vars"`
+	Hint  string `json:"hint,omitempty"`
 }
 
 type EvalArgs struct {

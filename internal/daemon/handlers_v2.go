@@ -104,14 +104,25 @@ func (s *Server) handleGlobals(ctx context.Context, req proto.Request) proto.Res
 	scopeName := "Globals"
 	for _, sc := range scopes.Body.Scopes {
 		n := strings.ToLower(sc.Name)
-		if strings.Contains(n, "global") || strings.Contains(n, "module") {
+		if strings.Contains(n, "global") || strings.Contains(n, "module") || strings.Contains(n, "static") {
 			ref = sc.VariablesReference
 			scopeName = sc.Name
 			break
 		}
 	}
 	if ref == 0 {
-		return ok(proto.LocalsResult{Scope: "Globals"})
+		out := proto.LocalsResult{Scope: "Globals"}
+		// Java doesn't expose globals as a scope. Derive the declaring class
+		// from the current frame name (e.g. "com.foo.Bar.method(int)") and
+		// give the user/agent a copy-pasteable hint.
+		if sess.Lang == "java" {
+			if cls := javaClassFromFrame(ctx, sess, args.Frame); cls != "" {
+				out.Hint = "Java doesn't expose globals as a scope. Inspect statics with: eval " + cls + ".<fieldName>  (or: eval " + cls + ".class.getDeclaredFields())"
+			} else {
+				out.Hint = "Java doesn't expose globals as a scope. Use 'eval <ClassName>.<fieldName>' to read static fields."
+			}
+		}
+		return ok(out)
 	}
 	vars, err := sess.Client().Variables(ctx, ref)
 	if err != nil {
@@ -539,4 +550,28 @@ func (s *Server) handleUntil(ctx context.Context, req proto.Request) proto.Respo
 		return errResp("TIMEOUT", werr.Error(), "")
 	}
 	return ok(info)
+}
+
+// javaClassFromFrame extracts the declaring class name from a DAP stack
+// frame's display name. java-debug formats frame names as
+// "pkg.Class.method(arg)" or sometimes "Class.method". Returns "" when the
+// shape is unrecognized.
+func javaClassFromFrame(ctx context.Context, sess *session.Session, idx int) string {
+	r, err := sess.Client().StackTrace(ctx, sess.CurrentThread(), 1+idx)
+	if err != nil || len(r.Body.StackFrames) == 0 {
+		return ""
+	}
+	if idx < 0 || idx >= len(r.Body.StackFrames) {
+		idx = 0
+	}
+	name := r.Body.StackFrames[idx].Name
+	// Strip "(args)" suffix.
+	if p := strings.Index(name, "("); p > 0 {
+		name = name[:p]
+	}
+	// "pkg.Class.method" -> "pkg.Class"
+	if dot := strings.LastIndex(name, "."); dot > 0 {
+		return name[:dot]
+	}
+	return ""
 }

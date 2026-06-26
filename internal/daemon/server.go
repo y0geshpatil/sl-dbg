@@ -622,7 +622,41 @@ func (s *Server) handleLocals(ctx context.Context, req proto.Request) proto.Resp
 			Ref: v.VariablesReference, Expandable: v.VariablesReference > 0,
 		})
 	}
+	// Java without debug info: javac strips local-variable names so JDWP
+	// returns only synthetic argN slots. Detect and nudge the user.
+	if sess.Lang == "java" && looksLikeMissingDebugInfo(out.Vars) {
+		out.Hint = "Java source was compiled without debug info — locals show only argN slots. Recompile with: javac -g <file>.java"
+	}
 	return ok(out)
+}
+
+// looksLikeMissingDebugInfo returns true when every variable name is "this"
+// or "argN" — the telltale signature of javac without -g.
+func looksLikeMissingDebugInfo(vars []proto.Var) bool {
+	if len(vars) == 0 {
+		return false
+	}
+	hasArg := false
+	for _, v := range vars {
+		if v.Name == "this" {
+			continue
+		}
+		if len(v.Name) >= 4 && v.Name[:3] == "arg" {
+			ok := true
+			for _, c := range v.Name[3:] {
+				if c < '0' || c > '9' {
+					ok = false
+					break
+				}
+			}
+			if ok {
+				hasArg = true
+				continue
+			}
+		}
+		return false
+	}
+	return hasArg
 }
 
 func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Response {

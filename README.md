@@ -93,11 +93,22 @@ sl-dbg locals
 
 ### Use from an AI agent
 ```bash
-# Expose sl-dbg as MCP tools (planned)
+# Expose sl-dbg as MCP tools over stdio (JSON-RPC 2.0)
 sl-dbg mcp
-# Now any MCP-compatible agent (Claude Desktop, Cursor, Copilot CLI…)
-# can call set_breakpoint, continue, get_variables, evaluate, etc.
+# Any MCP-compatible client (Claude Desktop, Cursor, Continue) can now
+# call debug_start, debug_break, debug_continue, debug_locals, debug_eval, …
 ```
+
+## Language-specific caveats
+
+**Java**
+- Compile with `javac -g` to get local variables — without `-g`, `locals` returns only `arg0/arg1/…` (JDWP limitation; `sl-dbg` will print a hint when it detects this).
+- `globals` returns no scope because the Java DAP doesn't expose statics as a scope. Use `sl-dbg eval ClassName.fieldName` (the `Hint` field on the response points at the current class).
+- Conditional breakpoints on a `for (...)` header line fire on loop init when the loop variable isn't yet in scope. Put the breakpoint on the body line for reliable conditions.
+- The `--source-root` flag is required when attaching so `sl-dbg source` can resolve files.
+
+**Python**
+- `debugpy` reports `hitBreakpointIds` as `null`; `--once` is honored via a file:line fallback (handled internally).
 
 ## Architecture
 

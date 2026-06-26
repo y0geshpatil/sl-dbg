@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -150,15 +152,19 @@ func newAttachCmd() *cobra.Command {
 }
 
 func newListenCmd() *cobra.Command {
-	var timeoutSec float64
+	var timeout string
 	c := &cobra.Command{
 		Use:   "listen",
 		Short: "Block until the program stops at a breakpoint, exits, or terminates",
 		RunE: func(*cobra.Command, []string) error {
-			return callRaw(proto.CmdListen, gFlags.Session, proto.ListenArgs{TimeoutSec: timeoutSec})
+			secs, err := parseTimeoutFlag(timeout, 60)
+			if err != nil {
+				return Usage("invalid --timeout: %v", err)
+			}
+			return callRaw(proto.CmdListen, gFlags.Session, proto.ListenArgs{TimeoutSec: secs})
 		},
 	}
-	c.Flags().Float64Var(&timeoutSec, "timeout", 60, "max seconds to wait")
+	c.Flags().StringVar(&timeout, "timeout", "60s", "max wait (Go duration like 30s, 1m, or bare seconds)")
 	return c
 }
 
@@ -428,7 +434,7 @@ func newPauseCmd() *cobra.Command {
 
 func newUntilCmd() *cobra.Command {
 	var thread int
-	var timeoutSec float64
+	var timeout string
 	c := &cobra.Command{
 		Use:   "until <line>",
 		Short: "Continue execution until a given line in the current file",
@@ -438,13 +444,17 @@ func newUntilCmd() *cobra.Command {
 			if err != nil || n <= 0 {
 				return Usage("invalid line: %s", a[0])
 			}
+			secs, err := parseTimeoutFlag(timeout, 30)
+			if err != nil {
+				return Usage("invalid --timeout: %v", err)
+			}
 			return callRaw(proto.CmdUntil, gFlags.Session, proto.UntilArgs{
-				Line: n, Thread: thread, TimeoutSec: timeoutSec,
+				Line: n, Thread: thread, TimeoutSec: secs,
 			})
 		},
 	}
 	c.Flags().IntVar(&thread, "thread", 0, "thread id (default: current)")
-	c.Flags().Float64Var(&timeoutSec, "timeout", 30, "max seconds to wait")
+	c.Flags().StringVar(&timeout, "timeout", "30s", "max wait (Go duration like 30s, 1m, or bare seconds)")
 	return c
 }
 
@@ -530,19 +540,23 @@ func newFieldsCmd() *cobra.Command {
 
 func newEvalCmd() *cobra.Command {
 	var frame int
-	var timeoutSec float64
+	var timeout string
 	c := &cobra.Command{
 		Use:   "eval <expression>",
 		Short: "Evaluate an expression",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, a []string) error {
+			secs, err := parseTimeoutFlag(timeout, 0)
+			if err != nil {
+				return Usage("invalid --timeout: %v", err)
+			}
 			return callRaw(proto.CmdEval, gFlags.Session, proto.EvalArgs{
-				Expression: a[0], Frame: frame, TimeoutSec: timeoutSec,
+				Expression: a[0], Frame: frame, TimeoutSec: secs,
 			})
 		},
 	}
 	c.Flags().IntVar(&frame, "frame", 0, "frame index")
-	c.Flags().Float64Var(&timeoutSec, "timeout", 0, "max seconds for the evaluation (0 = adapter default)")
+	c.Flags().StringVar(&timeout, "timeout", "", "max wait (Go duration like 30s, 1m, or bare seconds; empty = adapter default)")
 	return c
 }
 
@@ -701,28 +715,27 @@ type simpleErr struct{ s string }
 func (e *simpleErr) Error() string { return e.s }
 
 func timeoutSec() float64 {
-	// gFlags.Timeout is a duration string ("30s"). Trim "s" if present.
-	t := gFlags.Timeout
-	if t == "" {
+	v, err := parseTimeoutFlag(gFlags.Timeout, 30)
+	if err != nil {
 		return 30
 	}
-	// Quick parse: accept "30s", "1m", or numeric seconds.
-	var n float64
-	var unit byte = 's'
-	end := len(t)
-	if t[end-1] < '0' || t[end-1] > '9' {
-		unit = t[end-1]
-		end--
+	return v
+}
+
+// parseTimeoutFlag accepts either a Go duration string ("30s", "1m500ms") or
+// a bare number meaning seconds ("30", "1.5"). Empty string returns def.
+func parseTimeoutFlag(s string, def float64) (float64, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return def, nil
 	}
-	for i := 0; i < end; i++ {
-		if t[i] >= '0' && t[i] <= '9' {
-			n = n*10 + float64(t[i]-'0')
-		}
+	// Try Go duration first (handles "30s", "500ms", "1m", "1h30m").
+	if d, err := time.ParseDuration(s); err == nil {
+		return d.Seconds(), nil
 	}
-	switch unit {
-	case 'm':
-		return n * 60
-	default:
-		return n
+	// Fall back to bare float (seconds).
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return f, nil
 	}
+	return 0, fmt.Errorf("must be a duration like 30s, 1m, or a number of seconds; got %q", s)
 }
