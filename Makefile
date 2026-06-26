@@ -12,7 +12,7 @@ GO          ?= go
 GOFLAGS     :=
 BUILD_DIR   := bin
 
-.PHONY: all build install clean test test-unit test-integration lint fmt vet tidy run help
+.PHONY: all build install clean test test-unit test-integration lint fmt vet tidy run help java-adapter
 
 all: build
 
@@ -65,3 +65,8 @@ run: build
 ## help: Show this help
 help:
 	@grep -E '^## ' Makefile | sed 's/## //'
+
+## java-adapter: Build the embedded Java DAP launcher fat-jar (requires Maven + JDK 11+)
+java-adapter:
+	cd adapters/java-launcher && mvn -q -DskipTests package
+	@echo "✓ Built adapters/java-launcher/target/sl-dbg-java-adapter.jar"

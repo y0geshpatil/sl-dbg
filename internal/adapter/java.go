@@ -7,16 +7,14 @@ import (
 	"path/filepath"
 )
 
-// Java adapter: wraps Microsoft's java-debug.
+// Java adapter: spawns the sl-dbg Java launcher (a small fat-jar that embeds
+// Microsoft's java-debug-core and serves DAP over a TCP socket without needing
+// Eclipse JDT-LS).
 //
-// Two ways to find java-debug.jar:
-//   1. SL_DBG_JAVA_DEBUG_JAR env var
-//   2. ~/.cache/sl-dbg/adapters/java-debug.jar  (auto-downloaded — Phase 5 work)
-//
-// java-debug uses STDIO transport when launched as:
-//   java -cp java-debug.jar com.microsoft.java.debug.core.adapter.JdiDebugAdapter
-//
-// For attach mode, we forward host:port to JDWP via DAP attach args.
+// Jar resolution order:
+//   1. $SL_DBG_JAVA_DEBUG_JAR
+//   2. ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar (installed)
+//   3. <repo>/adapters/java-launcher/target/sl-dbg-java-adapter.jar (dev build)
 func init() {
 	Register(Spec{
 		Lang:      "java",
@@ -24,7 +22,7 @@ func init() {
 		Detect: func() (string, error) {
 			jar := javaDebugJarPath()
 			if jar == "" {
-				return "", fmt.Errorf("java-debug jar not found")
+				return "", fmt.Errorf("sl-dbg java adapter jar not found; build it with `make java-adapter` or set SL_DBG_JAVA_DEBUG_JAR")
 			}
 			if _, err := exec.LookPath("java"); err != nil {
 				return "", fmt.Errorf("`java` not in PATH")
@@ -37,16 +35,13 @@ func init() {
 		LaunchAdapter: func() ([]string, Transport, error) {
 			jar := javaDebugJarPath()
 			if jar == "" {
-				return nil, TransportStdio, fmt.Errorf("java-debug jar not configured (set SL_DBG_JAVA_DEBUG_JAR)")
+				return nil, TransportTCPListen, fmt.Errorf("sl-dbg java adapter jar not configured")
 			}
 			java, err := exec.LookPath("java")
 			if err != nil {
-				return nil, TransportStdio, err
+				return nil, TransportTCPListen, err
 			}
-			return []string{
-				java, "-cp", jar,
-				"com.microsoft.java.debug.core.adapter.JdiDebugAdapter",
-			}, TransportStdio, nil
+			return []string{java, "-jar", jar, "--port={PORT}"}, TransportTCPListen, nil
 		},
 		BuildLaunchArgs: func(cfg LaunchCfg) (map[string]interface{}, error) {
 			if cfg.MainClass == "" {
@@ -84,10 +79,9 @@ func init() {
 			}
 			return args, nil
 		},
-		InstallHint: "java-debug does not ship a standalone DAP server JAR. " +
-			"Workaround: clone https://github.com/microsoft/java-debug and run `mvn package` to build " +
-			"com.microsoft.java.debug.plugin-<ver>.jar plus its dependencies, then set " +
-			"SL_DBG_JAVA_DEBUG_JAR=/path/to/<plugin-with-deps>.jar. See examples/java/README.md for details.",
+		InstallHint: "Build the embedded launcher with `make java-adapter` (requires Maven + JDK 11+), " +
+			"or download a prebuilt sl-dbg-java-adapter.jar into ~/.cache/sl-dbg/adapters/. " +
+			"Override location with SL_DBG_JAVA_DEBUG_JAR.",
 	})
 }
 
@@ -95,13 +89,27 @@ func javaDebugJarPath() string {
 	if p := os.Getenv("SL_DBG_JAVA_DEBUG_JAR"); p != "" {
 		return p
 	}
-	home, _ := os.UserHomeDir()
-	if home == "" {
-		return ""
+	candidates := []string{}
+	if home, _ := os.UserHomeDir(); home != "" {
+		candidates = append(candidates,
+			filepath.Join(home, ".cache", "sl-dbg", "adapters", "sl-dbg-java-adapter.jar"),
+		)
 	}
-	candidate := filepath.Join(home, ".cache", "sl-dbg", "adapters", "java-debug.jar")
-	if _, err := os.Stat(candidate); err == nil {
-		return candidate
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		candidates = append(candidates,
+			filepath.Join(exeDir, "..", "adapters", "java-launcher", "target", "sl-dbg-java-adapter.jar"),
+		)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(wd, "adapters", "java-launcher", "target", "sl-dbg-java-adapter.jar"),
+		)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return c
+		}
 	}
 	return ""
 }

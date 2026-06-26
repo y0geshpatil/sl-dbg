@@ -57,6 +57,14 @@ type Session struct {
 	proc *exec.Cmd
 	caps godap.Capabilities
 
+	// For attach sessions where the debuggee is suspended on connection
+	// (e.g. JVM started with suspend=y) we defer the DAP configurationDone
+	// request until the first user action that should resume the program,
+	// so that breakpoints set via `sl-dbg break` between attach and the
+	// first `continue` are guaranteed to land before the VM starts running.
+	pendingConfigDone bool
+	configDoneMu      sync.Mutex
+
 	// Event coordination
 	events chan godap.Message // single subscription drain
 	doneCh chan struct{}
@@ -301,11 +309,14 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 		return nil, fmt.Errorf("timeout waiting for adapter 'initialized' event")
 	}
 
-	if err := s.cli.ConfigurationDone(ctx); err != nil {
-		s.Close()
-		return nil, err
-	}
+	// Defer configurationDone until the user issues their first resuming
+	// command (continue / next / step / pause). This lets `sl-dbg break ...`
+	// install breakpoints before the debuggee VM is released, which is the
+	// only way to catch a JVM that was started with suspend=y.
+	s.pendingConfigDone = true
 
+	// Wait briefly for the attach response (debuggers usually reply quickly
+	// once the JDI connection is established, without needing configDone).
 	select {
 	case msg, ok := <-attachCh:
 		if !ok {
@@ -318,11 +329,26 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 		}
 	case <-time.After(15 * time.Second):
 		s.Close()
-		return nil, fmt.Errorf("dap attach: timeout waiting for response after configurationDone")
+		return nil, fmt.Errorf("dap attach: timeout waiting for attach response")
 	}
 
 	m.register(s)
 	return s, nil
+}
+
+// EnsureConfigurationDone sends DAP configurationDone exactly once, just before
+// the first user-issued command that resumes execution. Safe to call repeatedly.
+func (s *Session) EnsureConfigurationDone(ctx context.Context) error {
+	s.configDoneMu.Lock()
+	defer s.configDoneMu.Unlock()
+	if !s.pendingConfigDone {
+		return nil
+	}
+	if err := s.cli.ConfigurationDone(ctx); err != nil {
+		return fmt.Errorf("dap configurationDone: %w", err)
+	}
+	s.pendingConfigDone = false
+	return nil
 }
 
 // startAdapter spawns the adapter subprocess and returns a Session shell.
@@ -591,6 +617,50 @@ func (s *Session) SetLastLocation(loc *proto.Loc) {
 	s.mu.Lock()
 	s.lastLocation = loc
 	s.mu.Unlock()
+}
+
+// StopWaiter is an opaque handle to a single-shot waiter for the next stop /
+// exit / terminate event on this session. Install one BEFORE issuing the DAP
+// request that triggers the event, then call Wait to block on the result.
+type StopWaiter struct {
+	ch <-chan stopEvent
+	s  *Session
+}
+
+// InstallWaiter registers a one-shot waiter for the next stop/exit/terminate
+// event, so callers can install the waiter before issuing the triggering DAP
+// request (avoiding the race where the event arrives between request-send and
+// waiter-install).
+func (s *Session) InstallWaiter() StopWaiter {
+	return StopWaiter{ch: s.installWaiter(), s: s}
+}
+
+// Wait blocks on the waiter, applying the usual timeout / ctx semantics, and
+// translates the result into proto.PauseInfo.
+func (w StopWaiter) Wait(ctx context.Context, timeout time.Duration) (proto.PauseInfo, error) {
+	var t <-chan time.Time
+	if timeout > 0 {
+		tm := time.NewTimer(timeout)
+		defer tm.Stop()
+		t = tm.C
+	}
+	select {
+	case ev := <-w.ch:
+		pi := proto.PauseInfo{Reason: ev.reason, Thread: ev.threadID, HitBP: ev.hitBP}
+		if ev.exited != nil {
+			pi.State = string(StateExited)
+			pi.ExitCode = ev.exited
+		} else if ev.terminated {
+			pi.State = string(StateTerminated)
+		} else {
+			pi.State = string(StatePaused)
+		}
+		return pi, nil
+	case <-t:
+		return proto.PauseInfo{State: string(StateRunning), Reason: "timeout"}, nil
+	case <-ctx.Done():
+		return proto.PauseInfo{}, ctx.Err()
+	}
 }
 
 // WaitForStop blocks until the session pauses again, exits, or timeout fires.

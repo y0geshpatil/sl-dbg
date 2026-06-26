@@ -361,33 +361,31 @@ func (s *Server) handleUnbreak(ctx context.Context, req proto.Request) proto.Res
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	// Track which files were touched so we can re-sync the DAP-side set for
+	// each. We must include files that became empty (so the adapter clears
+	// its breakpoints there too).
+	touchedFiles := map[string]bool{}
+	beforeRemove := sess.AllBPs()
+	for _, b := range beforeRemove {
+		touchedFiles[b.File] = true
+	}
+
 	var removed []int
 	if args.All {
-		for _, b := range sess.AllBPs() {
+		for _, b := range beforeRemove {
 			sess.RemoveBP(b.LocalID)
 			removed = append(removed, b.LocalID)
 		}
 	} else {
 		for _, id := range args.IDs {
-			if _, ok := sess.RemoveBP(id); ok {
+			if b, ok := sess.RemoveBP(id); ok {
 				removed = append(removed, id)
+				touchedFiles[b.File] = true
 			}
 		}
 	}
 
-	// Re-sync DAP for every file whose BP set changed: simplest correct approach
-	// is to push the current set for every file we *still* have BPs in PLUS
-	// any file we removed from. Track distinct files.
-	files := map[string]bool{}
-	for _, b := range sess.AllBPs() {
-		files[b.File] = true
-	}
-	// Also clear files where no BPs remain (we can't know — pass empty for safety
-	// only when we explicitly removed from that file). For simplicity, we just
-	// re-sync remaining files; old removed-only files keep their DAP-side BPs
-	// until the next setBreakpoints on that file. (Pragmatic v0 behavior.)
-
-	for file := range files {
+	for file := range touchedFiles {
 		bps := sess.BPsForFile(file)
 		dapBPs := make([]godap.SourceBreakpoint, 0, len(bps))
 		for _, b := range bps {
@@ -429,7 +427,11 @@ func (s *Server) handleExec(ctx context.Context, req proto.Request, kind execKin
 	}
 
 	// Install waiter BEFORE issuing the resume request to avoid losing the stop.
-	waiter := sess.WaitForStop
+	waiter := sess.InstallWaiter()
+
+	if err := sess.EnsureConfigurationDone(ctx); err != nil {
+		return errResp("ADAPTER_FAILED", err.Error(), "")
+	}
 
 	var execErr error
 	switch kind {
@@ -446,7 +448,7 @@ func (s *Server) handleExec(ctx context.Context, req proto.Request, kind execKin
 		return errResp("ADAPTER_FAILED", execErr.Error(), "")
 	}
 
-	pi, err := waiter(ctx, timeout)
+	pi, err := waiter.Wait(ctx, timeout)
 	if err != nil {
 		return errResp("INTERNAL_ERROR", err.Error(), "")
 	}
@@ -466,10 +468,16 @@ func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Respo
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	if err := sess.EnsureConfigurationDone(ctx); err != nil {
+		return errResp("ADAPTER_FAILED", err.Error(), "")
+	}
+	// Install waiter BEFORE issuing pause so we don't miss the
+	// StoppedEvent the adapter fires synchronously from its handler.
+	waiter := sess.InstallWaiter()
 	if err := sess.Client().Pause(ctx, sess.CurrentThread()); err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
-	pi, _ := sess.WaitForStop(ctx, 10*time.Second)
+	pi, _ := waiter.Wait(ctx, 10*time.Second)
 	return ok(pi)
 }
 
