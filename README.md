@@ -23,7 +23,7 @@ That's it. No REPL. No protocol. Just commands.
 |---|---|---|---|
 | Python | `debugpy` (Microsoft) | `pip install --user debugpy` | ✅ |
 | Go | `dlv dap` (Delve) | `go install github.com/go-delve/delve/cmd/dlv@latest` | ✅ |
-| Java | `java-debug` (Microsoft) | ⚠️ Phase 2 — needs sl-dbg-published prebuilt jar (`sl-dbg install-adapter java`). Code & sample are in place; live test deferred. | ⏳ |
+| Java | `java-debug` (Microsoft, embedded) | `sl-dbg install-adapter java` — builds the bundled launcher fat-jar | ✅ |
 | Node.js, Rust, C/C++, .NET | planned | each lands via `sl-dbg install-adapter <lang>` downloading a published binary | ⏳ |
 
 ### Why is Java different?
@@ -53,11 +53,19 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 
 ### Install
 ```bash
-brew install sl-dbg                                  # macOS / Linux (planned)
-# or
-curl -sSL https://sl-dbg.dev/install.sh | sh         # universal (planned)
-# or build from source:
-go install github.com/<owner>/sl-dbg/cmd/sl-dbg@latest
+# From a source checkout — one command, sets up CLI + every adapter:
+git clone <repo> sl-dbg && cd sl-dbg
+make setup            # builds ./bin/sl-dbg AND installs python/go/java adapters
+
+# Or install adapters individually any time:
+./bin/sl-dbg install-adapter all              # python (debugpy) + go (dlv) + java (launcher jar)
+./bin/sl-dbg install-adapter python           # just debugpy
+./bin/sl-dbg install-adapter go               # just dlv
+./bin/sl-dbg install-adapter java             # just the embedded Java DAP launcher
+
+# Future, once we publish releases:
+brew install sl-dbg                           # macOS / Linux (planned)
+curl -sSL https://sl-dbg.dev/install.sh | sh  # universal (planned)
 ```
 
 ### Debug a Python script

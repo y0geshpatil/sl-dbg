@@ -491,12 +491,7 @@ func newAdaptersCmd() *cobra.Command {
 }
 
 func newInstallAdapterCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "install-adapter <lang>",
-		Short: "Install a missing language adapter [planned]",
-		Args:  cobra.ExactArgs(1),
-		RunE:  func(*cobra.Command, []string) error { return NotImplemented("install-adapter") },
-	}
+	return newInstallAdapterCmdImpl()
 }
 
 // newDaemonCmd is satisfied by daemon_cmd.go's newDaemonCmd2. We use it here

@@ -12,7 +12,7 @@ GO          ?= go
 GOFLAGS     :=
 BUILD_DIR   := bin
 
-.PHONY: all build install clean test test-unit test-integration lint fmt vet tidy run help java-adapter
+.PHONY: all build install clean test test-unit test-integration lint fmt vet tidy run help java-adapter setup
 
 all: build
 
@@ -65,6 +65,11 @@ run: build
 ## help: Show this help
 help:
 	@grep -E '^## ' Makefile | sed 's/## //'
+
+## setup: One-command end-to-end install — build sl-dbg + every language adapter
+setup: build
+	./$(BUILD_DIR)/$(BINARY) install-adapter all
+	@echo "✓ sl-dbg is ready. Try: ./$(BUILD_DIR)/$(BINARY) adapters"
 
 ## java-adapter: Build the embedded Java DAP launcher fat-jar (requires Maven + JDK 11+)
 java-adapter:
