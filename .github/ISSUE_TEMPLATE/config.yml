@@ -6,3 +6,6 @@ contact_links:
   - name: 💬 Discussion / open-ended chat
     url: https://github.com/y0geshpatil/sl-dbg/discussions
     about: For broader design / strategy conversations, prefer Discussions over Issues.
+  - name: 🙋 Want to work on an open issue?
+    url: https://github.com/y0geshpatil/sl-dbg/blob/main/docs/TRIAGE.md#claim-before-work-sop--required
+    about: Read the Claim-Before-Work SOP first — self-assign + apply the `in-progress` label + comment "I'm on it" so nobody else duplicates the work. AI agents must self-identify in the claim comment.

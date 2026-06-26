@@ -68,6 +68,21 @@ sl-dbg/
 - Avoid panics outside of `init()`. Panics inside goroutines must be recovered to the daemon log.
 - No global mutable state outside `init()`. Pass dependencies explicitly.
 
+## Claim Before You Code
+
+Before opening an editor for any issue — even your own — claim it on GitHub. This stops two people (or two AI agents) silently duplicating work.
+
+```bash
+gh issue edit <N> --add-assignee @me --add-label in-progress
+gh issue comment <N> --body "Picking this up.
+- Who: <your handle, e.g. @alice or 'Copilot CLI session abc123' for AI agents>
+- Branch: fix/<slug>
+- Approach: <one line>
+- ETA: <today / this week / unsure>"
+```
+
+If you walk away before shipping, comment `"stepping away, unclaiming"` and remove the assignee + label. Full SOP — including the matching close-with-SHA rule — is in [`TRIAGE.md → Claim-Before-Work SOP`](TRIAGE.md#claim-before-work-sop--required). AI coding agents must self-identify in the claim comment.
+
 ## Definition of Done
 
 **Every PR must update all relevant surfaces in the same commit.** Code-only or docs-only PRs are accepted only when nothing else applies.

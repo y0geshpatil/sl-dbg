@@ -74,6 +74,47 @@ This document defines how issues and PRs are labelled and prioritised on `sl-dbg
 
 ---
 
+## Claim-Before-Work SOP — REQUIRED
+
+**Before writing a single line of code for an issue, claim it.** Otherwise two people (or two agents) silently duplicate work, waste context tokens, and ship conflicting PRs. This rule applies equally to human contributors and AI coding agents.
+
+To claim an issue:
+
+```bash
+# 1. Tell GitHub you're on it.
+gh issue edit <N> --add-assignee @me --add-label in-progress
+
+# 2. Post a comment with WHO is working and WHAT branch / approach.
+gh issue comment <N> --body "Picking this up.
+- Agent / handle: <your-name-or-agent-id>
+- Branch: fix/<short-slug>
+- Approach: <one-line plan>
+- ETA: <today / this week / unsure>
+Will drop a comment if I stop work."
+```
+
+The comment is the load-bearing part — assignees alone don't tell observers what you're doing or how long it'll take.
+
+**Rules:**
+
+1. **No claim, no code.** If the issue has no `in-progress` label and no assignee, anyone may pick it up; once those exist, ask in the issue before duplicating effort.
+2. **Claim ≠ reservation forever.** If you haven't pushed a commit referencing the issue within ~3 days, the claim is stale — comment "stepping away, unclaiming" and run `gh issue edit <N> --remove-assignee @me --remove-label in-progress`.
+3. **Multiple issues addressed in one PR is fine** — claim each of them and reference all via `Closes #A, #B, #C` in the PR description.
+4. **Agents must self-identify** in the claim comment with a short handle (e.g. `Copilot CLI session <id>`, `claude-sonnet`, `gpt-5.3-codex`) so a human reading the issue knows it's an automated claim and can revoke it if the agent disappears.
+5. **When you ship, close with a reference** — `gh issue close <N> -c "Fixed in <sha>. <one-line summary>"` (see [Closing SOP](#closing-sop) below).
+
+## Closing SOP — REQUIRED
+
+When a PR merges, every issue it closes must get a closing comment with the **commit SHA**, a **one-line summary of the fix**, and **the test(s) added**. Example:
+
+```bash
+gh issue close <N> -c "Fixed in 48425e5. <what changed in one sentence>. Covered by Test<Name>."
+```
+
+This is the audit trail. "Closed without comment" tells future readers nothing about *how* it was fixed or *whether* it was actually verified.
+
+---
+
 ## How a typical bug flows
 
 1. Reporter files via *Bug report* template → gets `bug` + `needs-triage`.

@@ -103,6 +103,17 @@ bin/sl-dbg daemon stop
 
 10. **Stateless invocations.** A user-visible CLI command translates to ONE daemon round-trip whenever possible. If you need multiple round-trips, add a composite (CLI side: helper function; MCP side: `composites.go`).
 
+11. **Claim before you code.** Before opening any editor for an issue, claim it on GitHub so a parallel human or agent doesn't duplicate the work:
+
+    ```bash
+    gh issue edit <N> --add-assignee @me --add-label in-progress
+    gh issue comment <N> --body "Picking this up. Agent: <your-handle>. Branch: fix/<slug>. Approach: <one line>. ETA: <today/this week/unsure>."
+    ```
+
+    If you're an AI agent, **identify yourself** in the comment (e.g. `Copilot CLI`, `claude-sonnet`, `gpt-5.3-codex` + the session ID if you have one). If you stop working before shipping, post `"stepping away, unclaiming"` and remove the assignee + label. Full SOP in [`docs/TRIAGE.md`](docs/TRIAGE.md#claim-before-work-sop--required).
+
+    When the work ships, close with a reference: `gh issue close <N> -c "Fixed in <sha>. <what changed>. Covered by Test<Name>."` — this is the audit trail.
+
 12. **Definition of Done — every change MUST update all four of these in the same PR:**
 
     | Surface touched | Required update |

@@ -28,6 +28,7 @@ Every PR must satisfy **all** of these before review. PRs missing any will be se
 Closes #
 <!-- (or: Refs #NNN if related but not closing) -->
 
+**Claim verification:** Before opening this PR you should have already claimed the linked issue with `gh issue edit <N> --add-assignee @me --add-label in-progress` and posted an "I'm on it" comment identifying yourself (especially if you're an AI agent). See [docs/TRIAGE.md → Claim-Before-Work SOP](../docs/TRIAGE.md#claim-before-work-sop--required). If you skipped the claim step, do it now and link this PR in the comment so the issue isn't worked on twice.
 ## What changed
 
 - [ ] CLI surface (new flag / subcommand) — updated `docs/COMMANDS.md`
