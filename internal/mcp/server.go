@@ -192,9 +192,10 @@ func (s *Server) handleToolCall(req rpcReq) {
 	s.write(rpcResp{ID: req.ID, Result: textContent(string(raw))})
 }
 
-// resolveSession defaults an empty session to "the only active one" when
-// exactly one session is alive in the daemon. This removes a class of
-// friction for agents that don't track session ids.
+// resolveSession defaults an empty session to the daemon's current default
+// (the most recently started session). This removes a class of friction
+// for agents that don't track session ids. Callers can override by passing
+// "session" in their tool args.
 func (s *Server) resolveSession(sess string) string {
 	if sess != "" {
 		return sess
@@ -205,11 +206,29 @@ func (s *Server) resolveSession(sess string) string {
 	}
 	var sr struct {
 		Sessions []struct {
-			ID string `json:"id"`
+			ID      string `json:"id"`
+			Default bool   `json:"default"`
+			State   string `json:"state"`
 		} `json:"sessions"`
 	}
 	if json.Unmarshal(raw, &sr) != nil {
 		return ""
+	}
+	// Prefer the daemon-declared default (matches CLI behaviour).
+	for _, ss := range sr.Sessions {
+		if ss.Default {
+			return ss.ID
+		}
+	}
+	// Fall back to the only live (not-exited) session if there is exactly one.
+	var live []string
+	for _, ss := range sr.Sessions {
+		if ss.State != "exited" && ss.State != "terminated" {
+			live = append(live, ss.ID)
+		}
+	}
+	if len(live) == 1 {
+		return live[0]
 	}
 	if len(sr.Sessions) == 1 {
 		return sr.Sessions[0].ID
@@ -282,6 +301,15 @@ func toolByName(name string) (Tool, bool) {
 }
 
 func objectSchema(required []string, props map[string]interface{}) map[string]interface{} {
+	// Every tool implicitly accepts an optional `session` arg. Agents that
+	// juggle multiple concurrent sessions can pin a call to a specific id;
+	// when omitted, the daemon's default session is used.
+	if _, taken := props["session"]; !taken {
+		props["session"] = map[string]interface{}{
+			"type":        "string",
+			"description": "optional session id; defaults to the daemon's current default (newest started)",
+		}
+	}
 	return map[string]interface{}{
 		"type":       "object",
 		"required":   required,
