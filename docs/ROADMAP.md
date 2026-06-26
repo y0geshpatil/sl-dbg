@@ -201,6 +201,19 @@ Order:
 
 ---
 
+
+## Documentation & Infrastructure — 2026-06-27 ✅
+
+**Goal:** Close the documentation and CI gaps needed before the first numbered release.
+
+- [x] SECURITY threat model for LLM/MCP trust boundaries (#24)
+- [x] GitHub Actions CI for Ubuntu and macOS plus lint fallback workflow (#32)
+- [x] Keep-a-Changelog release notes with a v0.1.0 placeholder (#34)
+- [x] Cross-platform support notes for macOS, Linux, and Windows caveats (#35)
+- [x] Intended config-file schema documentation for future `config.toml` support (#36)
+
+---
+
 ## Phase 7 — Beyond v1
 
 Ideas for later versions:

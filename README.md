@@ -1,3 +1,5 @@
+[![CI](https://github.com/y0geshpatil/sl-dbg/actions/workflows/ci.yml/badge.svg)](https://github.com/y0geshpatil/sl-dbg/actions/workflows/ci.yml)
+
 # sl-dbg
 
 > **Stateless Debugger** — a command-per-invocation CLI debugger built for AI agents, scripts, and humans who live in the terminal.
@@ -102,6 +104,11 @@ sl-dbg mcp
 # call debug_start, debug_break, debug_continue, debug_locals, debug_eval, …
 ```
 
+
+## Platform Support
+
+macOS is the tested development platform and Linux is supported with per-user Unix-domain sockets. Windows is not yet supported; it needs a named-pipe or Windows-native IPC implementation before support is claimed. See [docs/PLATFORMS.md](docs/PLATFORMS.md) for socket paths, install locations, shell `PATH` setup, and verification commands.
+
 ## Language-specific caveats
 
 **Java**
@@ -163,10 +170,13 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 | [docs/COMMANDS.md](docs/COMMANDS.md) | Full command reference & JSON schemas |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | Phased build plan with milestones |
 | [docs/ADAPTERS.md](docs/ADAPTERS.md) | Per-language adapter setup & auto-install |
+| [docs/PLATFORMS.md](docs/PLATFORMS.md) | Platform support, install paths, socket locations, and PATH setup |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Intended config-file schema and CLI-flag equivalents |
 | [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) | How AI agents should *use* sl-dbg as a debugger |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model & safe-use guide |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, code style, testing |
 | [docs/TRIAGE.md](docs/TRIAGE.md) | Issue/PR labels, priorities, and how triage works |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes and version history |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community ground rules |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability (don't file public issues) |
 

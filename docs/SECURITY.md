@@ -134,3 +134,68 @@ Only: command name, language, sl-dbg version, anonymous install ID, success/erro
 Please report vulnerabilities privately to `security@sl-dbg.dev` (placeholder — set up before public release). Do not file public GitHub issues for security bugs.
 
 See `SECURITY.md` (top-level, planned) for the formal disclosure process.
+
+---
+
+## Threat Model
+
+For MCP and agent-driven use, the core trust assumption is that `sl-dbg` is a local per-user debugger. It is not a multi-tenant service and it should not be exposed as a network daemon.
+
+| Actor | Trust level | Assumption |
+|---|---|---|
+| Local user | Trusted | Owns the daemon, socket, audit log, target process, and policy decisions. |
+| Local MCP client | Semi-trusted | Runs as the same user but may forward LLM-generated tool calls or prompt-injected arguments. |
+| Remote LLM provider | Untrusted | Can suggest debugger actions but must not be trusted with implicit filesystem, process, or eval authority. |
+| RAG / web / copy-paste input | Untrusted | May contain malicious instructions, paths, expressions, or launch arguments. |
+
+```text
+LLM client → MCP server (sl-dbg mcp) → daemon (Unix socket) → DAP adapter → target program
+```
+
+The highest-risk path is untrusted text becoming a debugger command that reads files, launches programs, evaluates expressions, or mutates a paused process.
+
+## Trust Boundaries
+
+| Boundary | What must be validated before forwarding |
+|---|---|
+| LLM client → MCP server | Tool names, JSON schema, argument types, missing required fields, and policy flags such as read-only mode. Treat all model-provided paths, expressions, and program names as untrusted. |
+| MCP server → daemon | Session selection, command allow/deny policy, read-only mutation checks, source-root restrictions, allowed program list, request size, and per-client/session limits. |
+| CLI → daemon | Same daemon-side validation as MCP. A local CLI is trusted to request work, but the daemon still owns canonical enforcement. |
+| Daemon → DAP adapter | Adapter launch path, adapter arguments, environment, working directory, timeout, output size, and protocol framing. Never let adapter-specific errors bypass sl-dbg error handling. |
+| DAP adapter → target program | Launch/attach policy, debug port exposure, eval/set permissions, breakpoint locations, and source lookup roots. Assume target output and DAP responses can be malformed or hostile. |
+| Daemon → audit log | Redact secrets before writing, bound record size, create files with user-only permissions, and avoid logging raw request payloads. |
+
+## Known Limitations (unfixed)
+
+These are known residual risks or correctness gaps. Some mitigations may land in the same PR window, but operators should assume the limitation exists until the issue is closed and a release is cut.
+
+- [#18](https://github.com/y0geshpatil/sl-dbg/issues/18): `debug_source` can read arbitrary files unless source roots are restricted. The `--allow-source-root` control is opt-in; if it is not set, source reads may still allow paths under the current working directory.
+- [#19](https://github.com/y0geshpatil/sl-dbg/issues/19): `debug_eval` can trigger language side effects, including file creation or other target-process actions. Eval is not a sandbox.
+- [#20](https://github.com/y0geshpatil/sl-dbg/issues/20): read-only mode still permits inspection commands such as `locals`, `globals`, `output`, and `source`, which can expose runtime secrets.
+- [#21](https://github.com/y0geshpatil/sl-dbg/issues/21): without an explicit program allowlist, agent-driven `start` requests may launch unexpected local binaries.
+- [#22](https://github.com/y0geshpatil/sl-dbg/issues/22): per-client and per-process limits are still being hardened; unrestricted local clients can cause resource pressure by opening sessions.
+- [#23](https://github.com/y0geshpatil/sl-dbg/issues/23): audit logging is required for production accountability but may be opt-in or incomplete until fully implemented.
+- [#4](https://github.com/y0geshpatil/sl-dbg/issues/4): watch expressions may not survive stop/start within the same daemon. This is primarily a correctness issue, but operators should not rely on watches as a persistent safety control.
+- [#3](https://github.com/y0geshpatil/sl-dbg/issues/3): wrapper primitive rendering is a correctness/usability gap, not currently a security boundary.
+
+## Hardening Recipe
+
+For a production MCP deployment, prefer a narrow, read-only policy with explicit launch and source allowlists plus an audit trail:
+
+```bash
+sl-dbg mcp \
+  --read-only \
+  --allow-program "java" \
+  --allow-program "python3" \
+  --allow-source-root ~/work \
+  --max-sessions 4 \
+  --audit-log ~/.local/state/sl-dbg/audit.log
+```
+
+Operational notes:
+
+- Run the MCP client, daemon, and target under the least-privileged local user that can debug the process.
+- Never expose the daemon socket or MCP stdio bridge over a network service.
+- Use SSH tunnels or Kubernetes port-forwarding for remote debug ports.
+- Keep eval disabled or covered by read-only policy for unattended LLM workflows.
+- Review the audit log after agent-driven sessions and rotate it with user-only permissions.
