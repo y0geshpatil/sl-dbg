@@ -441,16 +441,29 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 		Condition: bp.Condition,
 	}
 	if newBP != nil && !newBP.Verified {
-		// Look up the adapter's reason text from the response. java-debug
-		// often includes "no executable code at line N" or similar.
+		// Look up the adapter's reason text and any line-shift hint from
+		// the response. java-debug returns the actual line it placed the
+		// bp on if it shifted (e.g., '}' line → next executable line).
+		var shiftedTo int
 		for _, rbp := range resp.Body.Breakpoints {
-			if rbp.Line == bp.Line && rbp.Message != "" {
+			if rbp.Message != "" {
 				out.Reason = rbp.Message
 				break
 			}
+			if rbp.Line != 0 && rbp.Line != bp.Line {
+				shiftedTo = rbp.Line
+			}
 		}
 		if out.Reason == "" {
-			out.Reason = "unverified: class not yet loaded or line has no executable code"
+			switch {
+			case shiftedTo > 0:
+				out.Reason = fmt.Sprintf("line %d is not executable; nearest executable line is %d — try break ...:%d",
+					bp.Line, shiftedTo, shiftedTo)
+			case args.Condition != "":
+				out.Reason = "unverified: line has no executable code, conditional cannot bind, or class not yet loaded — pick a body line (not a loop/closing-brace header)"
+			default:
+				out.Reason = "unverified: class not yet loaded or line has no executable code"
+			}
 		}
 	}
 	return ok(out)
@@ -681,13 +694,29 @@ func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Respo
 	if err := sess.EnsureConfigurationDone(ctx); err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
-	// Install waiter BEFORE issuing pause so we don't miss the
-	// StoppedEvent the adapter fires synchronously from its handler.
+	// Pick a thread to pause. CurrentThread() returns 0 right after a
+	// continue (we haven't received another stop yet) — fall back to the
+	// adapter's thread list so we don't send pause(thread=0).
+	tid := sess.CurrentThread()
+	if tid == 0 {
+		if tr, terr := sess.Client().Threads(ctx); terr == nil && len(tr.Body.Threads) > 0 {
+			tid = tr.Body.Threads[0].Id
+		}
+	}
 	waiter := sess.InstallWaiter()
-	if err := sess.Client().Pause(ctx, sess.CurrentThread()); err != nil {
+	if err := sess.Client().Pause(ctx, tid); err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	pi, _ := waiter.Wait(ctx, 10*time.Second)
+	// Some adapters (notably JDWP for Java when the target is in a tight
+	// native or sleeping section) acknowledge the pause request but never
+	// fire StoppedEvent quickly. Surface this as a typed error instead of a
+	// silent "still running" so callers can retry or break-fn instead.
+	if pi.State != string(session.StatePaused) {
+		return errResp("PAUSE_TIMEOUT",
+			"adapter accepted pause but program did not stop within 10s",
+			"the thread may be in a sleep/wait/native frame; set a function or line breakpoint and continue")
+	}
 	return ok(pi)
 }
 

@@ -28,8 +28,21 @@ func (s *Server) handleWatch(ctx context.Context, req proto.Request) proto.Respo
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	// Infer action when the caller passes only payload fields. Common
+	// pattern: MCP agents call debug_watch with `expression` but no
+	// `action`, expecting "add"; previously this silently returned a list.
+	if args.Action == "" {
+		switch {
+		case args.Expression != "":
+			args.Action = "add"
+		case args.ID > 0 || args.All:
+			args.Action = "remove"
+		default:
+			args.Action = "list"
+		}
+	}
 	switch args.Action {
-	case "", "list":
+	case "list":
 		return ok(proto.WatchResult{Watches: s.evaluateWatches(ctx, sess, args.Frame)})
 	case "add":
 		if rerr := refuseIfReadOnly(sess); rerr != nil {
@@ -214,8 +227,21 @@ func (s *Server) handleSource(ctx context.Context, req proto.Request) proto.Resp
 			}
 		}
 	}
+	// Fallback: at entry pauses the StoppedEvent sometimes arrives without a
+	// resolved location. Ask the adapter for the current top stack frame so
+	// `debug_source` works zero-arg even right after `--stop-on-entry`.
+	if file == "" && sess.State() == session.StatePaused {
+		if topFile, topLine, ok := currentTopFrame(ctx, sess); ok {
+			file = topFile
+			current = topLine
+			if line == 0 {
+				line = topLine
+			}
+		}
+	}
 	if file == "" {
-		return errResp("USAGE_ERROR", "no file specified and no current pause location", "pass --file <path>")
+		return errResp("USAGE_ERROR", "no file specified and no current pause location",
+			"pass file=<path> or wait until the program is paused at a known location")
 	}
 
 	// Try filesystem first (works for attach-style debugging where source is local).
@@ -692,4 +718,17 @@ func expandRef(ctx context.Context, sess *session.Session, ref, depth, maxItems 
 		out = append(out, n)
 	}
 	return out, truncated, nil
+}
+
+// currentTopFrame fetches the top stack frame of the current thread when the
+// session is paused. Used as a fallback when LastPause hasn't captured a
+// location yet (common at entry pauses with some adapters).
+func currentTopFrame(ctx context.Context, sess *session.Session) (string, int, bool) {
+	tid := sess.CurrentThread()
+	r, err := sess.Client().StackTrace(ctx, tid, 1)
+	if err != nil || len(r.Body.StackFrames) == 0 {
+		return "", 0, false
+	}
+	f := r.Body.StackFrames[0]
+	return f.Source.Path, f.Line, f.Source.Path != ""
 }
