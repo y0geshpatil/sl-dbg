@@ -106,3 +106,24 @@ func TestExitCodeAccessor(t *testing.T) {
 		t.Errorf("ExitCode aliased internal state; session exitCode now %d", *s.exitCode)
 	}
 }
+
+// Issue #22: Reserve must enforce the configured cap and return ErrTooManySessions.
+func TestManagerReserveCap(t *testing.T) {
+	m := NewManager()
+	// Unlimited by default.
+	if err := m.Reserve(); err != nil {
+		t.Errorf("default cap must be unlimited: %v", err)
+	}
+	m.SetMaxSessions(2)
+	m.register(&Session{ID: "a"})
+	if err := m.Reserve(); err != nil {
+		t.Errorf("Reserve at 1/2 must succeed: %v", err)
+	}
+	m.register(&Session{ID: "b"})
+	if err := m.Reserve(); err == nil {
+		t.Errorf("Reserve at cap must fail")
+	}
+	if m.MaxSessions() != 2 {
+		t.Errorf("MaxSessions accessor wrong: %d", m.MaxSessions())
+	}
+}

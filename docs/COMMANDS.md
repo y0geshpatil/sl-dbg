@@ -335,6 +335,22 @@ Or on error:
 | `INSPECT_NOT_PAUSED` | `debug_inspect_at`: continue ended in exit/timeout, not the requested BP | Confirm reachability |
 | `PAUSE_TIMEOUT` | Adapter accepted pause but did not stop within 10s | Set a line BP and continue instead |
 | `TIMEOUT` | Operation exceeded its `--timeout` | Raise `--timeout` |
+| `PROGRAM_NOT_ALLOWED` | `debug_start`: program path not in `SL_DBG_ALLOW_PROGRAM` allowlist | Add program to allowlist or unset env var |
+| `SOURCE_PATH_DENIED` | `debug_source`: file outside `SL_DBG_ALLOW_SOURCE_ROOT` and not under the session's own roots | Add parent dir to allowlist or include in `sourceRoots` |
+| `EVAL_DENIED` | `debug_eval`: expression matched `SL_DBG_DENY_EVAL_PATTERNS` | Rephrase, or set `SL_DBG_DENY_EVAL_PATTERNS=-` |
+| `RESOURCE_EXHAUSTED` | `debug_start`/`debug_attach`: daemon at `SL_DBG_MAX_SESSIONS` cap | Stop another session or raise the cap |
+
+### Security policy (env vars)
+
+The daemon reads these at startup. All are optional; defaults preserve legacy behavior. See [docs/SECURITY.md](SECURITY.md) for the threat model.
+
+| Env var | Purpose | Issue |
+|---|---|---|
+| `SL_DBG_ALLOW_PROGRAM` | Colon-separated glob allowlist for `start --program` paths. Globs match either the full path or basename. | #21 |
+| `SL_DBG_ALLOW_SOURCE_ROOT` | Colon-separated absolute-path roots that `debug_source` may read. The session's own `sourceRoots`/`cwd`/program dir are always trusted. | #18 |
+| `SL_DBG_MAX_SESSIONS` | Cap on concurrent sessions in the daemon. `0` (default) = unlimited. | #22 |
+| `SL_DBG_AUDIT_LOG` | Path. When set, every `start`/`attach`/`eval`/`set` is appended as one NDJSON line (`ts`, `event`, `session`, `args`). | #23 |
+| `SL_DBG_DENY_EVAL_PATTERNS` | Colon-separated substring deny list for `debug_eval` expressions. Default hardcoded list blocks the obvious Java side-effect classes (`FileOutputStream`, `Runtime.getRuntime`, …). Set to `-` to disable. | #19 |
 
 ## Schema / Versioning Policy
 

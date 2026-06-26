@@ -89,7 +89,7 @@ bin/sl-dbg daemon stop
 
 3. **Every response goes through `ok()` or `errResp()`** (server.go). Free-form `proto.Response{}` literals are a smell.
 
-4. **Errors use a stable code taxonomy.** Don't invent a new code unless you must. Existing codes: `USAGE_ERROR`, `SESSION_NOT_FOUND`, `LAUNCH_FAILED`, `ADAPTER_FAILED`, `READ_ONLY_MODE`, `TIMEOUT`, `MISSING_DEBUG_INFO`, `EVAL_NO_THIS`, `EVAL_NAME_UNKNOWN`, `CLASS_NOT_LOADED`, `STALE_FRAME`, `VM_DISCONNECTED`. When wrapping an adapter error, prefer `adapterErr(err, op)` (server.go) — it maps known JDI strings to actionable codes.
+4. **Errors use a stable code taxonomy.** Don't invent a new code unless you must. Existing codes: `USAGE_ERROR`, `SESSION_NOT_FOUND`, `LAUNCH_FAILED`, `ADAPTER_FAILED`, `READ_ONLY_MODE`, `TIMEOUT`, `MISSING_DEBUG_INFO`, `EVAL_NO_THIS`, `EVAL_NAME_UNKNOWN`, `EVAL_SYNTAX_ERROR`, `EVAL_RUNTIME_EXCEPTION`, `EVAL_DENIED`, `CLASS_NOT_LOADED`, `STALE_FRAME`, `VM_DISCONNECTED`, `BREAKPOINT_UNVERIFIED`, `INSPECT_NOT_PAUSED`, `PAUSE_TIMEOUT`, `PROGRAM_NOT_ALLOWED`, `SOURCE_PATH_DENIED`, `RESOURCE_EXHAUSTED`. When wrapping an adapter error, prefer `adapterErr(err, op)` (server.go) — it maps known JDI strings to actionable codes.
 
 5. **Read-only sessions must refuse mutations.** Call `refuseIfReadOnly(sess)` at the top of any handler that changes state (set, continue, step, break*, watch add/remove, …). Inspection commands (locals, stack, eval, snapshot, watches list) pass through.
 

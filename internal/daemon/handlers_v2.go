@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,38 @@ import (
 	"github.com/yogeshpatil/sl-dbg/internal/proto"
 	"github.com/yogeshpatil/sl-dbg/internal/session"
 )
+
+// sessionOwnsPath returns true when path is under one of the session's
+// known-good roots: configured SourceRoots, the launch Cwd, or the directory
+// of the launched program. Used as the per-session escape hatch from the
+// daemon-wide SL_DBG_ALLOW_SOURCE_ROOT allowlist so that existing flows that
+// passed sourceRoots explicitly continue to work without operator config.
+func sessionOwnsPath(sess *session.Session, path string) bool {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	abs = filepath.Clean(abs)
+	var roots []string
+	roots = append(roots, sess.SourceRoots...)
+	if sess.Cwd != "" {
+		roots = append(roots, sess.Cwd)
+	}
+	if sess.Program != "" {
+		roots = append(roots, filepath.Dir(sess.Program))
+	}
+	for _, r := range roots {
+		ra, err := filepath.Abs(r)
+		if err != nil {
+			continue
+		}
+		ra = filepath.Clean(ra)
+		if abs == ra || strings.HasPrefix(abs, ra+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
 
 // ----- watch -----
 
@@ -244,6 +277,19 @@ func (s *Server) handleSource(ctx context.Context, req proto.Request) proto.Resp
 			"pass file=<path> or wait until the program is paused at a known location")
 	}
 
+	// Policy: source-root allowlist (#18). Path is validated against the
+	// daemon-wide allowlist union the session's known-good roots
+	// (SourceRoots, Cwd, program dir). Only the daemon allowlist is hard;
+	// the per-session roots are convenience so existing flows keep working
+	// when no daemon allowlist is configured.
+	if err := s.policy.SourcePathAllowed(file); err != nil {
+		if !sessionOwnsPath(sess, file) {
+			s.audit.Log("source.denied", sess.ID, map[string]interface{}{"file": file, "reason": err.Error()})
+			return errResp("SOURCE_PATH_DENIED", err.Error(),
+				"set SL_DBG_ALLOW_SOURCE_ROOT to include a parent directory, or start the session with sourceRoots covering this path")
+		}
+	}
+
 	// Try filesystem first (works for attach-style debugging where source is local).
 	if lines, err := readSourceFile(file); err == nil {
 		start, end := windowOf(line, args.Around, len(lines))
@@ -360,6 +406,18 @@ func (s *Server) handleListen(ctx context.Context, req proto.Request) proto.Resp
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+	}
+	// Issue #30: short-circuit when the session is already paused/terminal.
+	// The old code installed a waiter and blocked for the full timeout even
+	// though there was nothing to wait for — every subsequent inspection
+	// call already had its location available via LastPause.
+	if st := sess.State(); st == session.StatePaused || st == session.StateExited || st == session.StateTerminated {
+		reason, hitBP, loc := sess.LastPause()
+		pi := proto.PauseInfo{State: string(st), Reason: reason, HitBP: hitBP, Location: loc}
+		if st == session.StatePaused && reason == "" {
+			pi.Reason = "already-paused"
+		}
+		return ok(pi)
 	}
 	timeout := 60 * time.Second
 	if args.TimeoutSec > 0 {

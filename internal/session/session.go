@@ -37,11 +37,13 @@ const (
 
 // Session is one debug session.
 type Session struct {
-	ID       string
-	Lang     string
-	Program  string // for launch sessions
-	Attached string // "host:port" for attach sessions, empty otherwise
-	ReadOnly bool
+	ID          string
+	Lang        string
+	Program     string   // for launch sessions
+	Cwd         string   // launch cwd, for source-root validation
+	SourceRoots []string // launch/attach source roots
+	Attached    string   // "host:port" for attach sessions, empty otherwise
+	ReadOnly    bool
 
 	mu              sync.Mutex
 	state           State
@@ -157,15 +159,38 @@ func newID() string {
 
 // Manager owns all sessions in the daemon process.
 type Manager struct {
-	mu       sync.RWMutex
-	sessions map[string]*Session
-	defID    string
+	mu          sync.RWMutex
+	sessions    map[string]*Session
+	defID       string
+	maxSessions int // 0 = unlimited
 }
 
 // NewManager returns an empty manager.
 func NewManager() *Manager {
 	return &Manager{sessions: map[string]*Session{}}
 }
+
+// SetMaxSessions sets the cap enforced by Reserve. Issue #22.
+func (m *Manager) SetMaxSessions(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxSessions = n
+}
+
+// Reserve returns ErrTooManySessions when the live-session count is at or
+// above the configured cap. Callers should invoke this before spawning an
+// expensive adapter process. Returns nil when no cap is set. Issue #22.
+func (m *Manager) Reserve() error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.maxSessions > 0 && len(m.sessions) >= m.maxSessions {
+		return ErrTooManySessions
+	}
+	return nil
+}
+
+// ErrTooManySessions is returned by Reserve / register when the cap is hit.
+var ErrTooManySessions = fmt.Errorf("max session limit reached")
 
 // List returns a snapshot of all sessions.
 func (m *Manager) List() []*Session {
@@ -264,6 +289,8 @@ func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Sess
 		s.ID = args.Name
 	}
 	s.Program = args.Program
+	s.Cwd = args.Cwd
+	s.SourceRoots = args.SourceRoots
 	s.ReadOnly = args.ReadOnly
 
 	if _, err := s.cli.Initialize(ctx, spec.AdapterID); err != nil {
@@ -348,6 +375,7 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 		s.ID = args.Name
 	}
 	s.ReadOnly = args.ReadOnly
+	s.SourceRoots = args.SourceRoots
 	if args.Port != 0 {
 		s.Attached = fmt.Sprintf("%s:%d", args.Host, args.Port)
 	} else if args.PID != 0 {
@@ -551,6 +579,13 @@ func (m *Manager) register(s *Session) {
 	// the old behavior (first-wins) silently sent commands to a stale
 	// session when the user started a second one.
 	m.defID = s.ID
+}
+
+// MaxSessions returns the configured cap (0 = unlimited).
+func (m *Manager) MaxSessions() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.maxSessions
 }
 
 // validateName ensures a user-supplied session name is unique and safe.

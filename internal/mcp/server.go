@@ -160,6 +160,14 @@ func (s *Server) handleToolCall(req rpcReq) {
 		s.write(rpcResp{ID: req.ID, Error: &rpcErr{Code: -32601, Message: "unknown tool: " + p.Name}})
 		return
 	}
+	// Issue #26: validate args against the tool's inputSchema before
+	// forwarding to the daemon. Catches the obvious agent mistakes
+	// (missing required field, wrong enum value, wrong type) with a clear
+	// MCP error instead of letting the daemon return a cryptic ADAPTER_FAILED.
+	if verr := validateArgs(tool.InputSchema, p.Arguments); verr != nil {
+		s.write(rpcResp{ID: req.ID, Result: errorContent(verr.Error())})
+		return
+	}
 	// Composite/custom handler: tool runs its own logic, possibly making
 	// several daemon calls. Bypass the standard Translate path.
 	if tool.Handler != nil {

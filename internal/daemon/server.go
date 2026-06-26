@@ -33,6 +33,11 @@ type Server struct {
 	logger   *log.Logger
 	mu       sync.Mutex
 	closing  bool
+
+	// Policy + audit are loaded from SL_DBG_* env vars at daemon startup.
+	// Zero values = legacy permissive behavior (issues #18–#23).
+	policy Policy
+	audit  *AuditLogger
 }
 
 // Run starts the daemon and blocks until shutdown or fatal error.
@@ -55,7 +60,19 @@ func Run() error {
 	srv := &Server{
 		mgr:    session.NewManager(),
 		logger: logger,
+		policy: LoadPolicyFromEnv(),
 	}
+	audit, aerr := srv.policy.OpenAudit()
+	if aerr != nil {
+		logger.Printf("WARN: cannot open SL_DBG_AUDIT_LOG=%q: %v (continuing without audit)", srv.policy.AuditLogPath, aerr)
+	}
+	srv.audit = audit
+	if srv.policy.MaxSessions > 0 {
+		srv.mgr.SetMaxSessions(srv.policy.MaxSessions)
+	}
+	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q deny_eval_patterns=%d",
+		len(srv.policy.AllowProgram), len(srv.policy.AllowSourceRoot), srv.policy.MaxSessions,
+		srv.policy.AuditLogPath, len(srv.policy.DenyEvalPatterns))
 
 	// Refuse to start if another daemon is alive.
 	stalePid := 0
@@ -233,10 +250,21 @@ func (s *Server) handleStart(ctx context.Context, req proto.Request) proto.Respo
 	if err := unmarshalArgs(req.Args, &args); err != nil {
 		return errResp("USAGE_ERROR", err.Error(), "")
 	}
+	// Policy: program allowlist (#21).
+	if err := s.policy.ProgramAllowed(args.Program); err != nil {
+		s.audit.Log("start.denied", "", map[string]interface{}{"program": args.Program, "reason": err.Error()})
+		return errResp("PROGRAM_NOT_ALLOWED", err.Error(), "set SL_DBG_ALLOW_PROGRAM to include this program, or restart the daemon without the env var")
+	}
+	// Policy: per-daemon session cap (#22).
+	if err := s.mgr.Reserve(); err != nil {
+		s.audit.Log("start.denied", "", map[string]interface{}{"program": args.Program, "reason": err.Error()})
+		return errResp("RESOURCE_EXHAUSTED", err.Error(), fmt.Sprintf("the daemon is configured with SL_DBG_MAX_SESSIONS=%d. Stop an existing session or raise the limit.", s.mgr.MaxSessions()))
+	}
 	sess, err := s.mgr.CreateLaunch(ctx, args)
 	if err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
+	s.audit.Log("start", sess.ID, map[string]interface{}{"lang": args.Lang, "program": args.Program, "cwd": args.Cwd})
 	// Initial state. If stopOnEntry was requested, wait briefly for the entry pause.
 	if args.StopOnEntry {
 		pi, _ := sess.WaitForStop(ctx, 5*time.Second)
@@ -312,10 +340,15 @@ func (s *Server) handleAttach(ctx context.Context, req proto.Request) proto.Resp
 	if err := unmarshalArgs(req.Args, &args); err != nil {
 		return errResp("USAGE_ERROR", err.Error(), "")
 	}
+	if err := s.mgr.Reserve(); err != nil {
+		s.audit.Log("attach.denied", "", map[string]interface{}{"reason": err.Error()})
+		return errResp("RESOURCE_EXHAUSTED", err.Error(), fmt.Sprintf("the daemon is configured with SL_DBG_MAX_SESSIONS=%d. Stop an existing session or raise the limit.", s.mgr.MaxSessions()))
+	}
 	sess, err := s.mgr.CreateAttach(ctx, args)
 	if err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
+	s.audit.Log("attach", sess.ID, map[string]interface{}{"lang": args.Lang, "host": args.Host, "port": args.Port})
 	return ok(proto.SessionResult{
 		SessionID: sess.ID, Lang: sess.Lang, State: string(sess.State()), Reason: "attached",
 	})
@@ -922,6 +955,13 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if err != nil {
 		return errResp("SESSION_NOT_FOUND", err.Error(), "")
 	}
+	// Policy: eval deny-list (#19). Substring-match defeats the obvious
+	// Java side-effect classes that bypass the `context: "watch"` hint.
+	if err := s.policy.EvalAllowed(args.Expression); err != nil {
+		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": err.Error()})
+		return errResp("EVAL_DENIED", err.Error(),
+			"the daemon blocks this expression via SL_DBG_DENY_EVAL_PATTERNS. Set the env var to '-' to disable, or remove the deny-listed token.")
+	}
 	if sess.ReadOnly {
 		// Allow watch context but not repl (repl can mutate state).
 	}
@@ -939,6 +979,7 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 		defer cancel()
 	}
 	r, err := sess.Client().Evaluate(ctx, args.Expression, frameID, context_)
+	s.audit.Log("eval", sess.ID, map[string]interface{}{"expr": args.Expression, "context": context_, "ok": err == nil})
 	if err != nil {
 		if ctx.Err() == context.DeadlineExceeded {
 			return errResp("TIMEOUT", "evaluation exceeded timeout", "increase --timeout or simplify the expression")
@@ -1019,6 +1060,7 @@ func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Respons
 		ref = scopes.Body.Scopes[0].VariablesReference
 	}
 	r, err := sess.Client().SetVariable(ctx, ref, args.Name, args.Value)
+	s.audit.Log("set", sess.ID, map[string]interface{}{"name": args.Name, "value": args.Value, "ok": err == nil})
 	if err != nil {
 		return adapterErr(err, "set")
 	}
