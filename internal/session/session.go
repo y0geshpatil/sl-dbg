@@ -1,0 +1,625 @@
+// Package session models one debug session: an adapter subprocess plus a DAP
+// client plus mutable state (current thread, frame, breakpoints, last pause info).
+//
+// Sessions are owned by the daemon and looked up by short id.
+package session
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"time"
+
+	godap "github.com/google/go-dap"
+
+	"github.com/yogeshpatil/sl-dbg/internal/adapter"
+	"github.com/yogeshpatil/sl-dbg/internal/dap"
+	"github.com/yogeshpatil/sl-dbg/internal/proto"
+)
+
+// State represents the high-level execution state of a session.
+type State string
+
+const (
+	StateInitializing State = "initializing"
+	StatePaused       State = "paused"
+	StateRunning      State = "running"
+	StateExited       State = "exited"
+	StateTerminated   State = "terminated"
+)
+
+// Session is one debug session.
+type Session struct {
+	ID       string
+	Lang     string
+	Program  string // for launch sessions
+	Attached string // "host:port" for attach sessions, empty otherwise
+	ReadOnly bool
+
+	mu              sync.Mutex
+	state           State
+	currentThread   int
+	lastPauseReason string
+	lastLocation    *proto.Loc
+	lastHitBP       int
+	exitCode        *int
+	bpNextLocalID   int
+	bpsByID         map[int]*BP // local id -> BP info
+
+	cli  *dap.Client
+	proc *exec.Cmd
+	caps godap.Capabilities
+
+	// Event coordination
+	events chan godap.Message // single subscription drain
+	doneCh chan struct{}
+
+	// "Stopped waiter" — when blocking commands run, they install a waiter here.
+	waitersMu sync.Mutex
+	waiters   []chan stopEvent
+}
+
+// BP is a stored breakpoint record on the session side.
+type BP struct {
+	LocalID   int
+	File      string
+	Line      int
+	Condition string
+	HitCond   string
+	LogMsg    string
+	DAPID     int // id reported by adapter (may be 0 if not verified yet)
+	Verified  bool
+}
+
+type stopEvent struct {
+	reason   string
+	threadID int
+	location *proto.Loc
+	hitBP    int
+	exited   *int
+	terminated bool
+	message  string
+}
+
+// newID returns a short hex id.
+func newID() string {
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// Manager owns all sessions in the daemon process.
+type Manager struct {
+	mu       sync.RWMutex
+	sessions map[string]*Session
+	defID    string
+}
+
+// NewManager returns an empty manager.
+func NewManager() *Manager {
+	return &Manager{sessions: map[string]*Session{}}
+}
+
+// List returns a snapshot of all sessions.
+func (m *Manager) List() []*Session {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]*Session, 0, len(m.sessions))
+	for _, s := range m.sessions {
+		out = append(out, s)
+	}
+	return out
+}
+
+// Get returns the session with id sid, or the default session if sid is empty.
+func (m *Manager) Get(sid string) (*Session, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if sid == "" {
+		sid = m.defID
+	}
+	s, ok := m.sessions[sid]
+	if !ok {
+		return nil, fmt.Errorf("session not found: %q", sid)
+	}
+	return s, nil
+}
+
+// SetDefault changes the default session id.
+func (m *Manager) SetDefault(sid string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.sessions[sid]; !ok {
+		return fmt.Errorf("session not found: %q", sid)
+	}
+	m.defID = sid
+	return nil
+}
+
+// DefaultID returns the default session id, or "".
+func (m *Manager) DefaultID() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.defID
+}
+
+// Remove disposes a session.
+func (m *Manager) Remove(sid string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sessions[sid]; ok {
+		s.Close()
+		delete(m.sessions, sid)
+		if m.defID == sid {
+			m.defID = ""
+			// promote any remaining session
+			for k := range m.sessions {
+				m.defID = k
+				break
+			}
+		}
+	}
+}
+
+// CreateLaunch spawns the adapter, sends initialize+launch, and waits for the
+// "initialized" event before sending configurationDone.
+func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Session, error) {
+	spec, err := adapter.Get(args.Lang)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := spec.Detect(); err != nil {
+		return nil, fmt.Errorf("adapter %q not installed: %w  (hint: %s)", args.Lang, err, spec.InstallHint)
+	}
+	launchArgs, err := spec.BuildLaunchArgs(adapter.LaunchCfg{
+		Program:     args.Program,
+		Args:        args.Args,
+		Cwd:         args.Cwd,
+		Env:         args.Env,
+		StopOnEntry: args.StopOnEntry,
+		MainClass:   args.MainClass,
+		Classpath:   args.Classpath,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s, err := m.startAdapter(ctx, spec, args.Lang)
+	if err != nil {
+		return nil, err
+	}
+	s.Program = args.Program
+	s.ReadOnly = args.ReadOnly
+
+	if _, err := s.cli.Initialize(ctx, spec.AdapterID); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("dap initialize: %w", err)
+	}
+	s.caps = s.cli.Caps
+
+	// Subscribe BEFORE launch so we receive "initialized" event.
+	initialized := make(chan struct{}, 1)
+	s.startEventPump(initialized)
+
+	// Send launch asynchronously. debugpy holds the launch response until
+	// configurationDone, so we must not block on it here.
+	launchCh, err := s.cli.LaunchAsync(launchArgs)
+	if err != nil {
+		s.Close()
+		return nil, fmt.Errorf("dap launch send: %w", err)
+	}
+
+	// Wait for "initialized" event (up to 15s).
+	select {
+	case <-initialized:
+	case <-time.After(15 * time.Second):
+		s.Close()
+		return nil, fmt.Errorf("timeout waiting for adapter 'initialized' event")
+	}
+
+	if err := s.cli.ConfigurationDone(ctx); err != nil {
+		s.Close()
+		return nil, fmt.Errorf("dap configurationDone: %w", err)
+	}
+
+	// Now collect the launch response.
+	select {
+	case msg, ok := <-launchCh:
+		if !ok {
+			s.Close()
+			return nil, fmt.Errorf("dap launch: adapter disconnected")
+		}
+		if resp, ok := msg.(godap.ResponseMessage); ok && !resp.GetResponse().Success {
+			s.Close()
+			return nil, fmt.Errorf("dap launch failed: %s", resp.GetResponse().Message)
+		}
+	case <-time.After(15 * time.Second):
+		s.Close()
+		return nil, fmt.Errorf("dap launch: timeout waiting for response after configurationDone")
+	}
+
+	m.register(s)
+	return s, nil
+}
+
+// CreateAttach starts the adapter and issues attach.
+func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Session, error) {
+	spec, err := adapter.Get(args.Lang)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := spec.Detect(); err != nil {
+		return nil, fmt.Errorf("adapter %q not installed: %w  (hint: %s)", args.Lang, err, spec.InstallHint)
+	}
+	attachArgs, err := spec.BuildAttachArgs(adapter.AttachCfg{
+		Host:        args.Host,
+		Port:        args.Port,
+		PID:         args.PID,
+		SourceRoots: args.SourceRoots,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	s, err := m.startAdapter(ctx, spec, args.Lang)
+	if err != nil {
+		return nil, err
+	}
+	s.ReadOnly = args.ReadOnly
+	if args.Port != 0 {
+		s.Attached = fmt.Sprintf("%s:%d", args.Host, args.Port)
+	} else if args.PID != 0 {
+		s.Attached = fmt.Sprintf("pid:%d", args.PID)
+	}
+
+	if _, err := s.cli.Initialize(ctx, spec.AdapterID); err != nil {
+		s.Close()
+		return nil, err
+	}
+	s.caps = s.cli.Caps
+
+	initialized := make(chan struct{}, 1)
+	s.startEventPump(initialized)
+
+	attachCh, err := s.cli.AttachAsync(attachArgs)
+	if err != nil {
+		s.Close()
+		return nil, fmt.Errorf("dap attach send: %w", err)
+	}
+
+	select {
+	case <-initialized:
+	case <-time.After(15 * time.Second):
+		s.Close()
+		return nil, fmt.Errorf("timeout waiting for adapter 'initialized' event")
+	}
+
+	if err := s.cli.ConfigurationDone(ctx); err != nil {
+		s.Close()
+		return nil, err
+	}
+
+	select {
+	case msg, ok := <-attachCh:
+		if !ok {
+			s.Close()
+			return nil, fmt.Errorf("dap attach: adapter disconnected")
+		}
+		if resp, ok := msg.(godap.ResponseMessage); ok && !resp.GetResponse().Success {
+			s.Close()
+			return nil, fmt.Errorf("dap attach failed: %s", resp.GetResponse().Message)
+		}
+	case <-time.After(15 * time.Second):
+		s.Close()
+		return nil, fmt.Errorf("dap attach: timeout waiting for response after configurationDone")
+	}
+
+	m.register(s)
+	return s, nil
+}
+
+// startAdapter spawns the adapter subprocess and returns a Session shell.
+func (m *Manager) startAdapter(ctx context.Context, spec adapter.Spec, lang string) (*Session, error) {
+	argv, transport, err := spec.LaunchAdapter()
+	if err != nil {
+		return nil, err
+	}
+	if transport != "stdio" {
+		return nil, fmt.Errorf("transport %q not yet supported (stdio only for now)", transport)
+	}
+
+	cmd := exec.Command(argv[0], argv[1:]...)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	// Drain stderr to /dev/null-ish; in production we'd log it.
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		// Capture adapter stderr to a per-user log file for postmortem debugging.
+		logPath := os.Getenv("SL_DBG_ADAPTER_LOG")
+		if logPath == "" {
+			logPath = "/tmp/sl-dbg-adapter.log"
+		}
+		f, _ := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+		if f == nil {
+			_, _ = io.Copy(io.Discard, stderr)
+			return
+		}
+		defer f.Close()
+		_, _ = io.Copy(f, stderr)
+	}()
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start adapter %q: %w", strings.Join(argv, " "), err)
+	}
+
+	cli := dap.New(&stdioRWC{r: stdout, w: stdin, proc: cmd})
+
+	s := &Session{
+		ID:            newID(),
+		Lang:          lang,
+		state:         StateInitializing,
+		bpsByID:       map[int]*BP{},
+		bpNextLocalID: 1,
+		cli:           cli,
+		proc:          cmd,
+		doneCh:        make(chan struct{}),
+	}
+	return s, nil
+}
+
+func (m *Manager) register(s *Session) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.sessions[s.ID] = s
+	if m.defID == "" {
+		m.defID = s.ID
+	}
+}
+
+// startEventPump forwards DAP events into the session's internal handlers.
+// Signals 'initialized' channel exactly once on the first InitializedEvent.
+func (s *Session) startEventPump(initialized chan<- struct{}) {
+	sub := s.cli.Subscribe()
+	go func() {
+		signaled := false
+		for msg := range sub {
+			s.handleEvent(msg)
+			if !signaled {
+				if _, ok := msg.(*godap.InitializedEvent); ok {
+					signaled = true
+					initialized <- struct{}{}
+				}
+			}
+		}
+		close(s.doneCh)
+	}()
+}
+
+func (s *Session) handleEvent(msg godap.Message) {
+	switch ev := msg.(type) {
+	case *godap.StoppedEvent:
+		s.mu.Lock()
+		s.state = StatePaused
+		s.currentThread = ev.Body.ThreadId
+		s.lastPauseReason = ev.Body.Reason
+		s.lastHitBP = 0
+		if len(ev.Body.HitBreakpointIds) > 0 {
+			s.lastHitBP = ev.Body.HitBreakpointIds[0]
+		}
+		// location filled later via stack request on demand
+		s.lastLocation = nil
+		s.mu.Unlock()
+		s.notifyWaiters(stopEvent{
+			reason:   ev.Body.Reason,
+			threadID: ev.Body.ThreadId,
+			hitBP:    s.lastHitBP,
+		})
+
+	case *godap.ContinuedEvent:
+		s.mu.Lock()
+		s.state = StateRunning
+		s.mu.Unlock()
+
+	case *godap.ExitedEvent:
+		ec := ev.Body.ExitCode
+		s.mu.Lock()
+		s.state = StateExited
+		s.exitCode = &ec
+		s.mu.Unlock()
+		s.notifyWaiters(stopEvent{reason: "exited", exited: &ec})
+
+	case *godap.TerminatedEvent:
+		s.mu.Lock()
+		if s.state != StateExited {
+			s.state = StateTerminated
+		}
+		s.mu.Unlock()
+		s.notifyWaiters(stopEvent{reason: "terminated", terminated: true})
+	}
+}
+
+// installWaiter registers a one-shot waiter for the next stop/exit/terminate event.
+func (s *Session) installWaiter() chan stopEvent {
+	ch := make(chan stopEvent, 1)
+	s.waitersMu.Lock()
+	s.waiters = append(s.waiters, ch)
+	s.waitersMu.Unlock()
+	return ch
+}
+
+func (s *Session) notifyWaiters(ev stopEvent) {
+	s.waitersMu.Lock()
+	w := s.waiters
+	s.waiters = nil
+	s.waitersMu.Unlock()
+	for _, ch := range w {
+		select {
+		case ch <- ev:
+		default:
+		}
+	}
+}
+
+// Close releases all resources.
+func (s *Session) Close() {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if s.cli != nil {
+		_ = s.cli.Disconnect(ctx, true)
+		_ = s.cli.Close()
+	}
+	if s.proc != nil && s.proc.Process != nil {
+		_ = s.proc.Process.Kill()
+		_, _ = s.proc.Process.Wait()
+	}
+}
+
+// State returns the current state.
+func (s *Session) State() State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.state
+}
+
+// CurrentThread returns the last-known stopped thread, or 1.
+func (s *Session) CurrentThread() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentThread == 0 {
+		return 1
+	}
+	return s.currentThread
+}
+
+// Caps returns the adapter capabilities reported by initialize.
+func (s *Session) Caps() godap.Capabilities { return s.caps }
+
+// Client returns the DAP client.
+func (s *Session) Client() *dap.Client { return s.cli }
+
+// LastPause returns the last pause metadata.
+func (s *Session) LastPause() (reason string, hitBP int, loc *proto.Loc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.lastPauseReason, s.lastHitBP, s.lastLocation
+}
+
+// SetLastLocation updates the cached pause location.
+func (s *Session) SetLastLocation(loc *proto.Loc) {
+	s.mu.Lock()
+	s.lastLocation = loc
+	s.mu.Unlock()
+}
+
+// WaitForStop blocks until the session pauses again, exits, or timeout fires.
+func (s *Session) WaitForStop(ctx context.Context, timeout time.Duration) (proto.PauseInfo, error) {
+	ch := s.installWaiter()
+	var t <-chan time.Time
+	if timeout > 0 {
+		tm := time.NewTimer(timeout)
+		defer tm.Stop()
+		t = tm.C
+	}
+	select {
+	case ev := <-ch:
+		pi := proto.PauseInfo{
+			Reason: ev.reason,
+			Thread: ev.threadID,
+			HitBP:  ev.hitBP,
+		}
+		if ev.exited != nil {
+			pi.State = string(StateExited)
+			pi.ExitCode = ev.exited
+		} else if ev.terminated {
+			pi.State = string(StateTerminated)
+		} else {
+			pi.State = string(StatePaused)
+		}
+		return pi, nil
+	case <-t:
+		return proto.PauseInfo{State: string(StateRunning), Reason: "timeout"}, nil
+	case <-ctx.Done():
+		return proto.PauseInfo{}, ctx.Err()
+	}
+}
+
+// AllocBP reserves the next local breakpoint id.
+func (s *Session) AllocBP() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := s.bpNextLocalID
+	s.bpNextLocalID++
+	return id
+}
+
+// PutBP stores breakpoint metadata.
+func (s *Session) PutBP(b *BP) {
+	s.mu.Lock()
+	s.bpsByID[b.LocalID] = b
+	s.mu.Unlock()
+}
+
+// AllBPs returns a snapshot of all breakpoints.
+func (s *Session) AllBPs() []*BP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]*BP, 0, len(s.bpsByID))
+	for _, b := range s.bpsByID {
+		out = append(out, b)
+	}
+	return out
+}
+
+// RemoveBP removes by local id and returns whether it was present.
+func (s *Session) RemoveBP(id int) (*BP, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.bpsByID[id]
+	if ok {
+		delete(s.bpsByID, id)
+	}
+	return b, ok
+}
+
+// BPsForFile returns the breakpoints registered for a given source file.
+func (s *Session) BPsForFile(file string) []*BP {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []*BP
+	for _, b := range s.bpsByID {
+		if b.File == file {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// ----- stdio bridge -----
+
+type stdioRWC struct {
+	r    io.Reader
+	w    io.WriteCloser
+	proc *exec.Cmd
+}
+
+func (s *stdioRWC) Read(p []byte) (int, error)  { return s.r.Read(p) }
+func (s *stdioRWC) Write(p []byte) (int, error) { return s.w.Write(p) }
+func (s *stdioRWC) Close() error {
+	_ = s.w.Close()
+	return nil
+}
