@@ -68,6 +68,24 @@ sl-dbg/
 - Avoid panics outside of `init()`. Panics inside goroutines must be recovered to the daemon log.
 - No global mutable state outside `init()`. Pass dependencies explicitly.
 
+## Definition of Done
+
+**Every PR must update all relevant surfaces in the same commit.** Code-only or docs-only PRs are accepted only when nothing else applies.
+
+| If your change touches… | You MUST also update… |
+|---|---|
+| Logic in `internal/<pkg>` | A unit test in the same package's `*_test.go` |
+| CLI surface (flag, command, response) | `test/e2e/<lang>.sh` to exercise the new path |
+| Wire protocol (`internal/proto`) | `docs/COMMANDS.md` (schema + table-of-contents) |
+| MCP tool (added/renamed/schema change) | `docs/AGENT-GUIDE.md` |
+| `--help` output or JSON behavior | `README.md` or the relevant `docs/*.md` page |
+| New error code | `docs/COMMANDS.md` error-codes section + `AGENTS.md` §4 rule 4 list |
+| New codebase convention or gotcha worth remembering | `AGENTS.md` §4 (convention) or §5 (gotcha) |
+
+A PR that adds logic without tests, or changes behavior without docs, will be sent back. This is non-negotiable — the project explicitly prioritises maintainability over velocity. If a change is genuinely impossible to test, that's usually a design smell; flag it in the PR description and propose a refactor instead of working around it.
+
+The PR template enforces this with a checkbox list; AGENTS.md §4 rule 12 spells it out for AI coding agents working on the codebase.
+
 ## Commit & PR Conventions
 
 - One logical change per commit.

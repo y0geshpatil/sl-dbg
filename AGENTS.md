@@ -103,9 +103,23 @@ bin/sl-dbg daemon stop
 
 10. **Stateless invocations.** A user-visible CLI command translates to ONE daemon round-trip whenever possible. If you need multiple round-trips, add a composite (CLI side: helper function; MCP side: `composites.go`).
 
-11. **Comments are sparse on purpose.** Only comment non-obvious *why*. Don't restate the code. Run-of-the-mill setters, helpers, switches stay un-commented.
+12. **Definition of Done — every change MUST update all four of these in the same PR:**
 
-12. **Test discipline.** Daemon unit tests use a fake `dap.Client` (see `internal/daemon/*_test.go`); they MUST NOT spawn a real adapter or rely on network. Adapter behavior is covered by `test/e2e/*.sh` end-to-end.
+    | Surface touched | Required update |
+    |---|---|
+    | **Logic / handler** (`internal/daemon`, `internal/session`, `internal/adapter/*`, `internal/mcp/composites.go`, `internal/cli/*`) | A new or updated **unit test** under the same package's `*_test.go`. No PR ships untested logic. |
+    | **CLI surface** (new flag, subcommand, JSON field) | An **e2e assertion** in `test/e2e/<lang>.sh` exercising the new path against a real adapter. |
+    | **Wire protocol** (`internal/proto`) | Update **`docs/COMMANDS.md`** with the new field + schema, and bump the doc table-of-contents if the command name is new. |
+    | **MCP tool** (added, renamed, schema change) | Update `tools/list` snapshot if there's one; document the tool in **`docs/AGENT-GUIDE.md`** (composites section or table). |
+    | **User-visible behavior** (anything observable in `sl-dbg --help` output, JSON responses, or error codes) | Update **`README.md`** or the relevant `docs/*.md` page in the same commit. README and docs drift is treated as a bug. |
+    | **New error code** | Append to the AGENTS.md §4 rule 4 list and to `docs/COMMANDS.md` error-codes section. |
+    | **New convention or gotcha** discovered while debugging | Add a bullet under AGENTS.md §4 (convention) or §5 (gotcha) so the next agent doesn't trip on it. |
+
+    A PR that adds code without tests, or changes behavior without docs, will be sent back. This is non-negotiable — it's the difference between this codebase staying maintainable and it rotting. If you can't write a test for a change, that's a signal the design is wrong; ask before working around it.
+
+13. **Comments are sparse on purpose.** Only comment non-obvious *why*. Don't restate the code. Run-of-the-mill setters, helpers, switches stay un-commented.
+
+14. **Test discipline.** Daemon unit tests use a fake `dap.Client` (see `internal/daemon/*_test.go`); they MUST NOT spawn a real adapter or rely on network. Adapter behavior is covered by `test/e2e/*.sh` end-to-end.
 
 ---
 
