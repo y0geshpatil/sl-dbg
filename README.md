@@ -117,11 +117,18 @@ sl-dbg locals
 
 ### Use from an AI agent
 ```bash
-# Expose sl-dbg as MCP tools over stdio (JSON-RPC 2.0)
+# Register sl-dbg with your agent (one of: claude|cursor|vscode|codex|copilot|all)
+sl-dbg mcp install claude
+
+# Or print the JSON/TOML snippet to paste yourself
+sl-dbg mcp install --print
+
+# Under the hood, agents launch this — exposes every command as an MCP tool
 sl-dbg mcp
-# Any MCP-compatible client (Claude Desktop, Cursor, Continue) can now
-# call debug_start, debug_break, debug_continue, debug_locals, debug_eval, …
 ```
+`sl-dbg mcp install` does a safe read-merge-write with a timestamped `.bak`
+backup. It refuses to overwrite an existing entry unless `--force` is passed,
+and `--dry-run` shows the diff without touching disk.
 
 
 ## Platform Support
