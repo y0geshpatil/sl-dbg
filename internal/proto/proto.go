@@ -244,6 +244,7 @@ type BreakResult struct {
 	Function  string `json:"function,omitempty"`
 	Condition string `json:"condition,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	Hits      int    `json:"hits,omitempty"`
 }
 
 type UnbreakArgs struct {

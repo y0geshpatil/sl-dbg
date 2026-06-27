@@ -132,6 +132,7 @@ type FuncBP struct {
 	HitCond   string
 	DAPID     int
 	Verified  bool
+	Hits      int
 }
 
 // BP is a stored breakpoint record on the session side.
@@ -145,6 +146,7 @@ type BP struct {
 	Once      bool // remove after first hit
 	DAPID     int  // id reported by adapter (may be 0 if not verified yet)
 	Verified  bool
+	Hits      int // number of times the adapter reported this BP id in a StoppedEvent
 }
 
 type stopEvent struct {
@@ -721,8 +723,16 @@ func (s *Session) handleEvent(msg godap.Message) {
 		if len(ev.Body.HitBreakpointIds) > 0 {
 			for _, hid := range ev.Body.HitBreakpointIds {
 				for _, b := range s.bpsByID {
-					if b.Once && b.DAPID == hid {
-						toRemove = append(toRemove, b.LocalID)
+					if b.DAPID == hid {
+						b.Hits++ // Issue: breaks-hits — surface hit count via `breaks`.
+						if b.Once {
+							toRemove = append(toRemove, b.LocalID)
+						}
+					}
+				}
+				for i := range s.funcBPs {
+					if s.funcBPs[i].DAPID == hid {
+						s.funcBPs[i].Hits++
 					}
 				}
 			}
@@ -810,6 +820,19 @@ func (s *Session) Close() {
 		_ = s.proc.Process.Kill()
 		_, _ = s.proc.Process.Wait()
 	}
+	// Issue #45: explicitly drop the large per-session buffers so the
+	// GC can reclaim them immediately after Manager.Remove returns,
+	// instead of waiting for the event-pump goroutine to wind down.
+	s.bufMu.Lock()
+	s.evlog = nil
+	s.outputs = nil
+	s.bufMu.Unlock()
+	s.mu.Lock()
+	s.bpsByID = nil
+	s.funcBPs = nil
+	s.watches = nil
+	s.lastLocation = nil
+	s.mu.Unlock()
 }
 
 // State returns the current state.

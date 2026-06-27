@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -486,6 +487,15 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 	if err != nil {
 		return errResp("USAGE_ERROR", err.Error(), `expected "file:line" or "Class:line"`)
 	}
+	// Issue: break-class-line — for Java, "ClassName:line" or
+	// "com.pkg.ClassName:line" is the natural reference (no source file
+	// path needed). Resolve it to a .java file under sourceRoots so the
+	// adapter gets a real Source.Path.
+	if sess.Lang == "java" && !strings.ContainsAny(file, "/\\") && !strings.HasSuffix(file, ".java") {
+		if resolved, ok := resolveJavaClassToFile(file, sess.SourceRoots); ok {
+			file = resolved
+		}
+	}
 	// Validate file + line before bothering the adapter. Class-name "files"
 	// (no path separator) are passed through — the adapter resolves those.
 	if strings.ContainsAny(file, "/\\") {
@@ -643,7 +653,7 @@ func (s *Server) handleBreaks(req proto.Request) proto.Response {
 		}
 		out.Breakpoints = append(out.Breakpoints, proto.BreakResult{
 			ID: b.LocalID, Verified: b.Verified, File: b.File, Line: b.Line,
-			Condition: b.Condition, Reason: reason,
+			Condition: b.Condition, Reason: reason, Hits: b.Hits,
 		})
 	}
 	for _, b := range sess.FuncBPs() {
@@ -653,7 +663,7 @@ func (s *Server) handleBreaks(req proto.Request) proto.Response {
 		}
 		out.Breakpoints = append(out.Breakpoints, proto.BreakResult{
 			ID: b.LocalID, Verified: b.Verified, Function: b.Name,
-			Condition: b.Condition, Reason: reason,
+			Condition: b.Condition, Reason: reason, Hits: b.Hits,
 		})
 	}
 	if filters := sess.ExcFilters(); len(filters) > 0 {
@@ -1212,6 +1222,40 @@ func parseLocation(loc string) (string, int, error) {
 		}
 	}
 	return file, line, nil
+}
+
+// resolveJavaClassToFile maps a Java class reference (either "Outer" or
+// "com.pkg.Outer", with optional "$Inner" suffix) to an existing .java file
+// under one of the sourceRoots. Inner-class qualifiers are stripped because
+// they share the outer class's source file. Returns ("", false) when no
+// matching file exists in any root.
+//
+// Used by handleBreak so `sl-dbg break ComplexLoopDebug:42 --lang java`
+// works without requiring the caller to know the on-disk path.
+func resolveJavaClassToFile(class string, roots []string) (string, bool) {
+	if class == "" {
+		return "", false
+	}
+	if i := strings.Index(class, "$"); i >= 0 {
+		class = class[:i]
+	}
+	rel := strings.ReplaceAll(class, ".", "/") + ".java"
+	bare := class
+	if i := strings.LastIndex(class, "."); i >= 0 {
+		bare = class[i+1:]
+	}
+	bareRel := bare + ".java"
+	for _, root := range roots {
+		for _, cand := range []string{
+			filepath.Join(root, rel),
+			filepath.Join(root, bareRel),
+		} {
+			if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
+				return cand, true
+			}
+		}
+	}
+	return "", false
 }
 
 func looksLikeFilePath(p string) bool {

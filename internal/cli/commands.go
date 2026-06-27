@@ -752,6 +752,8 @@ func newDaemonCmd() *cobra.Command { return newDaemonCmd2() }
 
 func newMCPCmd() *cobra.Command {
 	var readOnly bool
+	var allowCwd []string
+	var denyProgram []string
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run as an MCP server over stdio",
@@ -761,13 +763,24 @@ Cursor, Continue, or any MCP-aware client.
 
 Use --read-only to hide tools that can change debugger or program state
 (start, attach, break, continue/step, eval, watch add/remove, etc.). The
-remaining inspection-only tools are safe to expose to an untrusted agent.`,
+remaining inspection-only tools are safe to expose to an untrusted agent.
+
+Use --allow-cwd <dir> (repeatable) to restrict debug_start/debug_attach
+to programs whose cwd or program path is under one of the listed roots.
+Use --deny-program <substr> (repeatable) to block program paths matching
+any of the listed case-insensitive substrings outright.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			srv := mcp.NewServerWithOptions(os.Stdin, os.Stdout, mcpDaemonCaller{}, mcp.Options{ReadOnly: readOnly})
+			srv := mcp.NewServerWithOptions(os.Stdin, os.Stdout, mcpDaemonCaller{}, mcp.Options{
+				ReadOnly:    readOnly,
+				AllowCwd:    allowCwd,
+				DenyProgram: denyProgram,
+			})
 			return srv.Run(context.Background())
 		},
 	}
 	c.Flags().BoolVar(&readOnly, "read-only", false, "expose only inspection tools; hide mutating ones")
+	c.Flags().StringSliceVar(&allowCwd, "allow-cwd", nil, "restrict start/attach to programs under these dirs (repeatable)")
+	c.Flags().StringSliceVar(&denyProgram, "deny-program", nil, "block start/attach when program contains any of these substrings (repeatable)")
 	return c
 }
 

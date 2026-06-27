@@ -212,7 +212,14 @@ func (c *Client) Initialize(ctx context.Context, adapterID string) (*godap.Initi
 	req := &godap.InitializeRequest{
 		Request: godap.Request{ProtocolMessage: godap.ProtocolMessage{Type: "request"}, Command: "initialize"},
 		Arguments: godap.InitializeRequestArguments{
-			ClientID:                     "sl-dbg",
+			// Issue #43: debugpy gates feature behavior on clientID. With
+			// clientID="sl-dbg" some downstream paths (notably hit-count
+			// and conditional bp evaluation) fall through to a minimal
+			// default that ignores the modifier. Identify as "vscode"
+			// to enable the full breakpoint-modifier code path. Java's
+			// vscode-java-debug and dlv don't care about clientID, so
+			// this is a safe one-size-fits-all change.
+			ClientID:                     "vscode",
 			ClientName:                   "sl-dbg",
 			AdapterID:                    adapterID,
 			LinesStartAt1:                true,

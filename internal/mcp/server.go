@@ -34,6 +34,17 @@ type Options struct {
 	// tools remain available — ideal when handing the server to an untrusted
 	// agent that should observe but not perturb the target.
 	ReadOnly bool
+
+	// AllowCwd, if non-empty, restricts `debug_start` and `debug_attach` to
+	// program paths whose absolute form is within one of these directories.
+	// Empty means no restriction. Matched as a prefix on the cleaned absolute
+	// path (so /repo/a matches /repo/a/b but not /repo/abc). Issue: mcp-allowlist.
+	AllowCwd []string
+
+	// DenyProgram is a list of program substrings that block `debug_start`
+	// and `debug_attach` outright (e.g. "ssh", "/bin/rm"). Matched as a
+	// case-insensitive substring on the full args.Program. Issue: mcp-allowlist.
+	DenyProgram []string
 }
 
 // Server is one MCP session over stdio.
@@ -111,7 +122,9 @@ func (s *Server) handle(req rpcReq) {
 		s.write(rpcResp{ID: req.ID, Result: map[string]interface{}{
 			"protocolVersion": "2024-11-05",
 			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
+				"tools":     map[string]interface{}{},
+				"resources": map[string]interface{}{},
+				"prompts":   map[string]interface{}{},
 			},
 			"serverInfo": map[string]interface{}{
 				"name":    "sl-dbg",
@@ -130,6 +143,26 @@ func (s *Server) handle(req rpcReq) {
 			return
 		}
 		s.handleToolCall(req)
+	case "resources/list":
+		if notification {
+			return
+		}
+		s.write(rpcResp{ID: req.ID, Result: map[string]interface{}{"resources": s.listResources()}})
+	case "resources/read":
+		if notification {
+			return
+		}
+		s.handleResourceRead(req)
+	case "prompts/list":
+		if notification {
+			return
+		}
+		s.write(rpcResp{ID: req.ID, Result: map[string]interface{}{"prompts": listPrompts()}})
+	case "prompts/get":
+		if notification {
+			return
+		}
+		s.handlePromptGet(req)
 	case "shutdown":
 		if !notification {
 			s.write(rpcResp{ID: req.ID, Result: map[string]interface{}{}})
@@ -190,6 +223,14 @@ func (s *Server) handleToolCall(req rpcReq) {
 	if err != nil {
 		s.write(rpcResp{ID: req.ID, Result: errorContent(err.Error())})
 		return
+	}
+	// Issue: mcp-allowlist — gate program-executing commands on the
+	// configured AllowCwd / DenyProgram lists.
+	if cmd == proto.CmdStart || cmd == proto.CmdAttach {
+		if verr := s.enforceAllowlist(cmd, daemonArgs); verr != nil {
+			s.write(rpcResp{ID: req.ID, Result: errorContent(verr.Error())})
+			return
+		}
 	}
 	sess = s.resolveSession(sess)
 	raw, callErr := s.caller.Call(cmd, sess, daemonArgs)
