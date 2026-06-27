@@ -87,10 +87,25 @@ cat <<EOF
 
 Next steps:
   1. Make sure ${INSTALL_DIR} is on your PATH.
+
   2. Install language adapters you need:
        sl-dbg install-adapter python   # debugpy via pip
        sl-dbg install-adapter go       # dlv via go install
        sl-dbg install-adapter java     # java-debug via Maven
-  3. Try it:
+
+  3. Register sl-dbg with your AI agent (one-shot, edits the agent's config):
+       sl-dbg mcp install claude       # Claude Desktop
+       sl-dbg mcp install cursor       # Cursor
+       sl-dbg mcp install vscode       # ./.vscode/mcp.json (workspace-scoped)
+       sl-dbg mcp install codex        # Codex CLI (~/.codex/config.toml)
+       sl-dbg mcp install copilot      # GitHub Copilot CLI
+       sl-dbg mcp install all          # every agent detected on this machine
+       sl-dbg mcp install --print      # just print the snippet, do not touch files
+     (Add --dry-run to preview, --force to overwrite an existing entry.
+      A timestamped .bak of any existing config is written before the update.)
+
+  4. Try it:
        sl-dbg start --lang python --program <your-script.py> --stop-on-entry
+
+  Docs: https://y0geshpatil.github.io/sl-dbg-site/
 EOF
