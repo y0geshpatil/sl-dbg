@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"net/http"
+	_ "net/http/pprof" // diagnostic-only; exposed when SL_DBG_PPROF is set (issue #45)
 	"os"
 	"path/filepath"
 	"strconv"
@@ -146,6 +148,20 @@ func Run() error {
 		logger.Printf("WARN: previous daemon (pid %d) was not running; respawned cleanly. Any prior sessions are lost.", stalePid)
 	}
 	logger.Printf("daemon listening on %s (pid %d)", ipc.SocketPath(), os.Getpid())
+
+	// Diagnostic-only: when SL_DBG_PPROF=<addr> is set (e.g. ":6060" or
+	// "127.0.0.1:6060"), start the standard net/http/pprof server on a
+	// background goroutine. Off by default — never bind a port unless the
+	// operator explicitly opted in. Issue #45.
+	if addr := strings.TrimSpace(os.Getenv("SL_DBG_PPROF")); addr != "" {
+		go func(a string) {
+			logger.Printf("pprof: serving on http://%s/debug/pprof/ (SL_DBG_PPROF)", a)
+			srv := &http.Server{Addr: a, ReadHeaderTimeout: 5 * time.Second}
+			if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Printf("pprof: server exited: %v", err)
+			}
+		}(addr)
+	}
 
 	// Wait forever (handler goroutines do the work).
 	select {}
