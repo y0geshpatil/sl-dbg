@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yogeshpatil/sl-dbg/internal/mcp"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/mcp"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 // mcpDaemonCaller adapts daemonCall to the mcp.DaemonCaller interface.

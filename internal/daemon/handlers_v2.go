@@ -14,8 +14,8 @@ import (
 
 	godap "github.com/google/go-dap"
 
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
-	"github.com/yogeshpatil/sl-dbg/internal/session"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/session"
 )
 
 // sessionOwnsPath returns true when path is under one of the session's

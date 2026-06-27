@@ -17,8 +17,8 @@ import (
 	"os"
 	"sync"
 
-	"github.com/yogeshpatil/sl-dbg/internal/buildinfo"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/buildinfo"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 // DaemonCaller is the minimal surface a tool needs to talk to the daemon.

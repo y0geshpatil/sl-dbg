@@ -28,7 +28,7 @@ func NewRootCommand() *cobra.Command {
 		Long: `sl-dbg is a stateless, command-per-invocation debugger CLI built on the
 Debug Adapter Protocol (DAP). Each call is atomic; output is structured JSON.
 
-See https://github.com/yogeshpatil/sl-dbg for full documentation.`,
+See https://github.com/y0geshpatil/sl-dbg for full documentation.`,
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}

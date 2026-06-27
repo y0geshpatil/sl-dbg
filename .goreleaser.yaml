@@ -28,9 +28,9 @@ builds:
       - -trimpath
     ldflags:
       - -s -w
-      - -X github.com/yogeshpatil/sl-dbg/internal/buildinfo.Version={{.Version}}
-      - -X github.com/yogeshpatil/sl-dbg/internal/buildinfo.Commit={{.ShortCommit}}
-      - -X github.com/yogeshpatil/sl-dbg/internal/buildinfo.Date={{.Date}}
+      - -X github.com/y0geshpatil/sl-dbg/internal/buildinfo.Version={{.Version}}
+      - -X github.com/y0geshpatil/sl-dbg/internal/buildinfo.Commit={{.ShortCommit}}
+      - -X github.com/y0geshpatil/sl-dbg/internal/buildinfo.Date={{.Date}}
 
 archives:
   - id: default
@@ -59,15 +59,15 @@ changelog:
 
 # Publish a Homebrew formula to a tap repo on each tagged release.
 # Set HOMEBREW_TAP_GITHUB_TOKEN in repo secrets to enable.
-# Note: `brews:` will be renamed to `homebrew_formulas:` in a future
-# goreleaser release; update at that time.
+# NOTE: `brews:` is deprecated and will be renamed to `homebrew_formulas:`
+# in GoReleaser v3 — keep `brews:` until we upgrade.
 brews:
   - name: sl-dbg
     description: "Stateless debugger CLI for AI agents and humans (DAP-backed)"
-    homepage: "https://github.com/yogeshpatil/sl-dbg"
+    homepage: "https://github.com/y0geshpatil/sl-dbg"
     license: "Apache-2.0"
     repository:
-      owner: yogeshpatil
+      owner: y0geshpatil
       name: homebrew-sl-dbg
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     commit_author:

@@ -1,5 +1,5 @@
 BINARY      := sl-dbg
-PKG         := github.com/yogeshpatil/sl-dbg
+PKG         := github.com/y0geshpatil/sl-dbg
 VERSION     ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")
 COMMIT      ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 DATE        := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)

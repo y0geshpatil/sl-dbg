@@ -3,9 +3,9 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/yogeshpatil/sl-dbg/internal/daemon"
-	"github.com/yogeshpatil/sl-dbg/internal/ipc"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/daemon"
+	"github.com/y0geshpatil/sl-dbg/internal/ipc"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 // daemonCmd has two subcommands relevant to users:

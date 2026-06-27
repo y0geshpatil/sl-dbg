@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/yogeshpatil/sl-dbg/pkg/api"
+	"github.com/y0geshpatil/sl-dbg/pkg/api"
 )
 
 // emit prints a successful response to stdout in JSON form.

@@ -9,7 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 func init() {

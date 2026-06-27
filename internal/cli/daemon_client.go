@@ -9,8 +9,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/yogeshpatil/sl-dbg/internal/ipc"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/ipc"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 // daemonCall sends one request, returns the decoded response. It will

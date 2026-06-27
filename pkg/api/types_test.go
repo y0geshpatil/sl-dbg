@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/yogeshpatil/sl-dbg/pkg/api"
+	"github.com/y0geshpatil/sl-dbg/pkg/api"
 )
 
 // All sl-dbg responses must include a "schema" field so clients can detect

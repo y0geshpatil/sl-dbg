@@ -7,7 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/yogeshpatil/sl-dbg/internal/ipc"
+	"github.com/y0geshpatil/sl-dbg/internal/ipc"
 )
 
 func newLogsCmd() *cobra.Command {

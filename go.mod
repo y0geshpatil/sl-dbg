@@ -1,4 +1,4 @@
-module github.com/yogeshpatil/sl-dbg
+module github.com/y0geshpatil/sl-dbg
 
 go 1.22
 

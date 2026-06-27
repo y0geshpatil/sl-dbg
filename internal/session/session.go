@@ -20,9 +20,9 @@ import (
 
 	godap "github.com/google/go-dap"
 
-	"github.com/yogeshpatil/sl-dbg/internal/adapter"
-	"github.com/yogeshpatil/sl-dbg/internal/dap"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/adapter"
+	"github.com/y0geshpatil/sl-dbg/internal/dap"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
 )
 
 // State represents the high-level execution state of a session.

@@ -3,8 +3,8 @@ package cli
 import (
 	"github.com/spf13/cobra"
 
-	"github.com/yogeshpatil/sl-dbg/internal/buildinfo"
-	"github.com/yogeshpatil/sl-dbg/pkg/api"
+	"github.com/y0geshpatil/sl-dbg/internal/buildinfo"
+	"github.com/y0geshpatil/sl-dbg/pkg/api"
 )
 
 func newVersionCmd() *cobra.Command {

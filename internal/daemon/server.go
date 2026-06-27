@@ -21,10 +21,10 @@ import (
 
 	godap "github.com/google/go-dap"
 
-	"github.com/yogeshpatil/sl-dbg/internal/adapter"
-	"github.com/yogeshpatil/sl-dbg/internal/ipc"
-	"github.com/yogeshpatil/sl-dbg/internal/proto"
-	"github.com/yogeshpatil/sl-dbg/internal/session"
+	"github.com/y0geshpatil/sl-dbg/internal/adapter"
+	"github.com/y0geshpatil/sl-dbg/internal/ipc"
+	"github.com/y0geshpatil/sl-dbg/internal/proto"
+	"github.com/y0geshpatil/sl-dbg/internal/session"
 )
 
 // Server is the daemon.

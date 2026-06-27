@@ -56,22 +56,39 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 ## Quick Start
 
 ### Install
+
+Pick the method that fits your environment:
+
 ```bash
-# From a source checkout — one command, builds CLI + installs every adapter:
+# 1. Prebuilt binary (no Go toolchain needed) — once the repo is public:
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
+
+# 2. Go developers — install straight from source over the network:
+go install github.com/y0geshpatil/sl-dbg/cmd/sl-dbg@latest
+
+# 3. Homebrew (once the tap is published):
+brew install y0geshpatil/sl-dbg/sl-dbg
+
+# 4. From a source checkout — builds CLI and installs every adapter in one step:
 git clone https://github.com/y0geshpatil/sl-dbg.git && cd sl-dbg
 make setup            # builds ./bin/sl-dbg AND installs python/go/java adapters
 make install          # places sl-dbg on $GOPATH/bin (add to PATH)
+```
 
-# Or install adapters individually any time:
+After installing the binary, install the language adapters you actually need
+(none are bundled — they live in their respective ecosystems):
+
+```bash
 sl-dbg install-adapter all              # python (debugpy) + go (dlv) + java (launcher jar)
 sl-dbg install-adapter python           # just debugpy
 sl-dbg install-adapter go               # just dlv
 sl-dbg install-adapter java             # just the embedded Java DAP launcher
-
-# Future, once we publish releases:
-brew install sl-dbg                           # macOS / Linux (planned)
-curl -sSL https://sl-dbg.dev/install.sh | sh  # universal (planned)
 ```
+
+Tagged releases (and the binaries `install.sh` pulls) are produced by
+[GoReleaser](.goreleaser.yaml) via the `release` GitHub Actions workflow on
+every `git tag v*` push. See [docs/RELEASING.md](docs/RELEASING.md) for
+the cut-a-release playbook.
 
 ### Debug a Python script
 ```bash
