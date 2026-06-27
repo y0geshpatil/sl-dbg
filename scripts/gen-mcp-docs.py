@@ -24,7 +24,8 @@ def fetch_tools(binary: str) -> dict:
     list_res = {"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}}
     list_prm = {"jsonrpc": "2.0", "id": 4, "method": "prompts/list", "params": {}}
     payload = "\n".join(json.dumps(m) for m in (init, initd, list_tools, list_res, list_prm)) + "\n"
-    proc = subprocess.run([binary, "mcp"], input=payload, text=True,
+    proc = subprocess.run([binary, "mcp", "--safe", "--allow-program", "*", "--allow-eval"],
+                          input=payload, text=True,
                           capture_output=True, timeout=10)
     out = {"tools": [], "resources": [], "prompts": [], "server": {}}
     for line in proc.stdout.splitlines():
