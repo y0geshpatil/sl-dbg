@@ -123,6 +123,11 @@ sl-dbg break-fn com.example.UserService.login
 sl-dbg break-fn app.process_order
 ```
 
+For Java, both `Class.method` and `Class#method` are accepted; the daemon
+translates the final `.` to `#` (the form java-debug requires internally) and
+strips any `(arg-types)` signature suffix. Fully-qualified class names
+(`pkg.sub.Class.method`) work the same way.
+
 ### `sl-dbg break-ex <ExceptionType> [--uncaught | --caught | --all]`
 Exception breakpoint.
 ```bash

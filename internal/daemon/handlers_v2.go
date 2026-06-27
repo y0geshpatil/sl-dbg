@@ -493,7 +493,7 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	all := sess.FuncBPs()
 	dapBPs := make([]godap.FunctionBreakpoint, 0, len(all))
 	for _, b := range all {
-		fbp := godap.FunctionBreakpoint{Name: b.Name}
+		fbp := godap.FunctionBreakpoint{Name: normalizeFuncBPName(sess.Lang, b.Name)}
 		if b.Condition != "" {
 			fbp.Condition = b.Condition
 		}
@@ -518,6 +518,46 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 		Function:  bp.Name,
 		Condition: bp.Condition,
 	})
+}
+
+// normalizeFuncBPName adapts a user-supplied function-breakpoint name to the
+// format expected by the language adapter.
+//
+// The Java adapter (com.microsoft.java.debug.core's SetFunctionBreakpointsRequestHandler)
+// expects names in the form "FullyQualifiedClass#method"; it splits on '#' and
+// silently produces an unverified breakpoint if exactly two non-blank segments
+// are not present. Users naturally type "Class.method" (mirroring source code),
+// so for Java we translate the final '.' separator to '#'. We also strip any
+// "(...)" argument-signature suffix because the adapter doesn't accept it and
+// would treat the parentheses as part of the method name.
+//
+// For non-Java sessions the name is returned unchanged: the Python (debugpy)
+// and Go (dlv) adapters both accept dot-qualified names directly.
+func normalizeFuncBPName(lang, name string) string {
+	if name == "" {
+		return name
+	}
+	if lang != "java" {
+		return name
+	}
+	// Drop method-arg signature, e.g. "Foo.bar(int)" -> "Foo.bar".
+	if i := strings.IndexByte(name, '('); i >= 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	// If the user already used the adapter's native separator, pass through.
+	if strings.Contains(name, "#") {
+		return name
+	}
+	// Convert the final '.' (which separates class from method) into '#'.
+	// "com.example.Foo.bar" -> "com.example.Foo#bar". For nested types
+	// (Outer.Inner), the user must spell the class half with '$' and the
+	// adapter separator explicitly, i.e. "Outer$Inner#method", because JDI
+	// uses '$' for the inner-class delimiter and we can't distinguish
+	// package segments from outer-class segments by name alone.
+	if i := strings.LastIndexByte(name, '.'); i > 0 && i < len(name)-1 {
+		return name[:i] + "#" + name[i+1:]
+	}
+	return name
 }
 
 // ----- break-ex -----
