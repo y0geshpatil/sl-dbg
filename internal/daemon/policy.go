@@ -156,12 +156,15 @@ func (p Policy) ProgramAllowed(program string) error {
 }
 
 // SourcePathAllowed returns nil when path resolves to an absolute path under
-// at least one allowed root (or no roots are configured — legacy behavior).
+// at least one allowed root (SL_DBG_ALLOW_SOURCE_ROOT). When no roots are
+// configured this returns an error — the caller (handleSource) must have
+// already established the path is outside the session's own trusted roots,
+// so an empty allowlist here means "deny by default". Issue #18 / #46.
 // Rejects path-traversal attempts ("../..") because Clean+Abs normalises
-// them and the resulting absolute path must still be under a root. Issue #18.
+// them and the resulting absolute path must still be under a root.
 func (p Policy) SourcePathAllowed(path string) error {
 	if len(p.AllowSourceRoot) == 0 {
-		return nil
+		return fmt.Errorf("path %q is outside the session's source roots and SL_DBG_ALLOW_SOURCE_ROOT is unset", path)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

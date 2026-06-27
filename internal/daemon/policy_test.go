@@ -51,9 +51,11 @@ func TestPolicySourcePathAllowed(t *testing.T) {
 		t.Errorf("path traversal must be denied")
 	}
 
-	// No allowlist = permissive.
-	if err := (Policy{}).SourcePathAllowed("/etc/passwd"); err != nil {
-		t.Errorf("empty allowlist must permit, got %v", err)
+	// No allowlist (SL_DBG_ALLOW_SOURCE_ROOT unset) = deny-by-default;
+	// the per-session allowlist in handleSource is the only gate that lets
+	// real reads through. Issue #46.
+	if err := (Policy{}).SourcePathAllowed("/etc/passwd"); err == nil {
+		t.Errorf("empty allowlist must deny paths outside the session's own roots")
 	}
 }
 
