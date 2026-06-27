@@ -156,6 +156,7 @@ type stopEvent struct {
 	hitBP    int
 	exited   *int
 	terminated bool
+	signal   string
 	message  string
 }
 
@@ -610,14 +611,17 @@ func (s *Session) watchAdapterExit() {
 	}
 	reason := "adapter-exited"
 	if signalName != "" {
-		reason = "adapter-killed-" + signalName
+		// Surface signal-driven termination as reason:"signal" with the
+		// signal name carried separately, so callers don't have to
+		// decode an "exit code looks signal-shaped" heuristic.
+		reason = "signal"
 	}
 	s.state = StateTerminated
 	ecCopy := exitCode
 	s.exitCode = &ecCopy
-	s.lastTerminal = &stopEvent{reason: reason, terminated: true, exited: &ecCopy}
+	s.lastTerminal = &stopEvent{reason: reason, terminated: true, exited: &ecCopy, signal: signalName}
 	s.mu.Unlock()
-	s.notifyWaiters(stopEvent{reason: reason, terminated: true, exited: &ecCopy})
+	s.notifyWaiters(stopEvent{reason: reason, terminated: true, exited: &ecCopy, signal: signalName})
 }
 
 func pickFreePort() (int, error) {
@@ -865,6 +869,24 @@ func (s *Session) LastPause() (reason string, hitBP int, loc *proto.Loc) {
 	return s.lastPauseReason, s.lastHitBP, s.lastLocation
 }
 
+// LastTerminal returns the cached terminal-event info (reason, exit code,
+// signal name) for a session that has already exited or terminated. The ok
+// return is false if no terminal event has been observed yet.
+func (s *Session) LastTerminal() (reason string, exitCode *int, signal string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lastTerminal == nil {
+		return "", nil, "", false
+	}
+	ev := s.lastTerminal
+	var ec *int
+	if ev.exited != nil {
+		v := *ev.exited
+		ec = &v
+	}
+	return ev.reason, ec, ev.signal, true
+}
+
 // SetLastLocation updates the cached pause location.
 func (s *Session) SetLastLocation(loc *proto.Loc) {
 	s.mu.Lock()
@@ -911,7 +933,7 @@ func (w StopWaiter) Wait(ctx context.Context, timeout time.Duration) (proto.Paus
 	}
 	select {
 	case ev := <-w.ch:
-		pi := proto.PauseInfo{Reason: ev.reason, Thread: ev.threadID, HitBP: ev.hitBP}
+		pi := proto.PauseInfo{Reason: ev.reason, Thread: ev.threadID, HitBP: ev.hitBP, Signal: ev.signal}
 		if ev.exited != nil {
 			pi.State = string(StateExited)
 			pi.ExitCode = ev.exited
@@ -943,6 +965,7 @@ func (s *Session) WaitForStop(ctx context.Context, timeout time.Duration) (proto
 			Reason: ev.reason,
 			Thread: ev.threadID,
 			HitBP:  ev.hitBP,
+			Signal: ev.signal,
 		}
 		if ev.exited != nil {
 			pi.State = string(StateExited)

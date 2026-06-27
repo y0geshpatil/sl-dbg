@@ -19,24 +19,24 @@ import (
 )
 
 // sessionOwnsPath returns true when path is under one of the session's
-// known-good roots: configured SourceRoots, the launch Cwd, or the directory
-// of the launched program. Used as the per-session escape hatch from the
-// daemon-wide SL_DBG_ALLOW_SOURCE_ROOT allowlist so that existing flows that
-// passed sourceRoots explicitly continue to work without operator config.
+// known-good roots: configured SourceRoots, the launch Cwd, the directory
+// of the launched program, the directory of any registered breakpoint file,
+// or the directory of the current pause location. This is the per-session
+// allowlist enforced by handleSource (issue #18 / #57); it always applies
+// regardless of whether SL_DBG_ALLOW_SOURCE_ROOT is set.
 func sessionOwnsPath(sess *session.Session, path string) bool {
+	return pathUnderRoots(path, sessionSourceRoots(sess))
+}
+
+// pathUnderRoots returns true when path (after Abs+Clean) is equal to, or
+// nested under, any of roots (each independently Abs+Clean'd). Pure helper
+// kept package-private for testability.
+func pathUnderRoots(path string, roots []string) bool {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return false
 	}
 	abs = filepath.Clean(abs)
-	var roots []string
-	roots = append(roots, sess.SourceRoots...)
-	if sess.Cwd != "" {
-		roots = append(roots, sess.Cwd)
-	}
-	if sess.Program != "" {
-		roots = append(roots, filepath.Dir(sess.Program))
-	}
 	for _, r := range roots {
 		ra, err := filepath.Abs(r)
 		if err != nil {
@@ -44,6 +44,47 @@ func sessionOwnsPath(sess *session.Session, path string) bool {
 		}
 		ra = filepath.Clean(ra)
 		if abs == ra || strings.HasPrefix(abs, ra+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionSourceRoots collects every directory the daemon trusts as a source
+// root for the given session: explicit SourceRoots, launch Cwd, the program
+// directory, the directory of every registered breakpoint file, and the
+// directory of the current pause location. Exact files (breakpoint targets,
+// the paused file itself) are also returned so they match by equality.
+func sessionSourceRoots(sess *session.Session) []string {
+	var roots []string
+	roots = append(roots, sess.SourceRoots...)
+	if sess.Cwd != "" {
+		roots = append(roots, sess.Cwd)
+	}
+	if sess.Program != "" {
+		roots = append(roots, filepath.Dir(sess.Program), sess.Program)
+	}
+	for _, bp := range sess.AllBPs() {
+		if bp.File == "" {
+			continue
+		}
+		roots = append(roots, bp.File, filepath.Dir(bp.File))
+	}
+	if _, _, loc := sess.LastPause(); loc != nil && loc.File != "" {
+		roots = append(roots, loc.File, filepath.Dir(loc.File))
+	}
+	return roots
+}
+
+// hasDotDotSegment reports whether p contains a literal ".." path segment.
+// Used to reject traversal attempts unconditionally before any resolution,
+// even when (after Clean) the resulting absolute path would still land under
+// an allowed root. Issue #57.
+func hasDotDotSegment(p string) bool {
+	// Normalise to forward-slash so a single split covers both Unix and
+	// Windows-style separators without allocating a closure.
+	for _, seg := range strings.Split(filepath.ToSlash(p), "/") {
+		if seg == ".." {
 			return true
 		}
 	}
@@ -260,6 +301,17 @@ func (s *Server) handleSource(ctx context.Context, req proto.Request) proto.Resp
 	line := args.Line
 	current := 0
 
+	// Reject path-traversal attempts on the caller-supplied path before any
+	// resolution. Even when Clean() would normalise it to a path under an
+	// allowed root, explicit ".." segments are a strong signal of intent to
+	// escape the session's sandbox. Issue #57.
+	if file != "" && hasDotDotSegment(file) {
+		s.audit.Log("source.denied", sess.ID, map[string]interface{}{"file": file, "reason": "path contains '..' segment"})
+		return errResp("SOURCE_PATH_DENIED",
+			fmt.Sprintf("path %q contains '..' segment", file),
+			"pass an absolute path under the session's source roots (program dir, --source-root, or a registered breakpoint file)")
+	}
+
 	// Default: use the current pause location.
 	if file == "" {
 		if _, _, loc := sess.LastPause(); loc != nil {
@@ -287,16 +339,18 @@ func (s *Server) handleSource(ctx context.Context, req proto.Request) proto.Resp
 			"pass file=<path> or wait until the program is paused at a known location")
 	}
 
-	// Policy: source-root allowlist (#18). Path is validated against the
-	// daemon-wide allowlist union the session's known-good roots
-	// (SourceRoots, Cwd, program dir). Only the daemon allowlist is hard;
-	// the per-session roots are convenience so existing flows keep working
-	// when no daemon allowlist is configured.
-	if err := s.policy.SourcePathAllowed(file); err != nil {
-		if !sessionOwnsPath(sess, file) {
+	// Policy: source-path allowlist (#18 / #57). The path must resolve under
+	// either the session's known-good roots (SourceRoots, Cwd, program dir,
+	// registered breakpoint files, current pause location) OR — when set —
+	// the daemon-wide SL_DBG_ALLOW_SOURCE_ROOT. Without this check any caller
+	// with daemon access could read `/etc/passwd`, `~/.aws/credentials`, etc.
+	// even from a `--read-only` session.
+	if !sessionOwnsPath(sess, file) {
+		if err := s.policy.SourcePathAllowed(file); err != nil {
 			s.audit.Log("source.denied", sess.ID, map[string]interface{}{"file": file, "reason": err.Error()})
-			return errResp("SOURCE_PATH_DENIED", err.Error(),
-				"set SL_DBG_ALLOW_SOURCE_ROOT to include a parent directory, or start the session with sourceRoots covering this path")
+			return errResp("SOURCE_PATH_DENIED",
+				fmt.Sprintf("path %q is outside the session's source roots", file),
+				"start the session with --source-root covering this path, set SL_DBG_ALLOW_SOURCE_ROOT to include a parent directory, or set a breakpoint in the file first")
 		}
 	}
 
@@ -430,9 +484,26 @@ func (s *Server) handleListen(ctx context.Context, req proto.Request) proto.Resp
 	// though there was nothing to wait for — every subsequent inspection
 	// call already had its location available via LastPause.
 	if st := sess.State(); st == session.StatePaused || st == session.StateExited || st == session.StateTerminated {
+		if st == session.StateExited || st == session.StateTerminated {
+			// Don't use LastPause() here — that returns the most recent
+			// *pause* (e.g. "entry"), which is stale once the session
+			// has terminated. Use the cached terminal event so callers
+			// see the same reason/exitCode/signal that `state` reports.
+			pi := proto.PauseInfo{State: string(st), Reason: string(st)}
+			if reason, ec, sig, ok := sess.LastTerminal(); ok {
+				if reason != "" {
+					pi.Reason = reason
+				}
+				pi.ExitCode = ec
+				pi.Signal = sig
+			} else if ec := sess.ExitCode(); ec != nil {
+				pi.ExitCode = ec
+			}
+			return ok(pi)
+		}
 		reason, hitBP, loc := sess.LastPause()
 		pi := proto.PauseInfo{State: string(st), Reason: reason, HitBP: hitBP, Location: loc}
-		if st == session.StatePaused && reason == "" {
+		if reason == "" {
 			pi.Reason = "already-paused"
 		}
 		return ok(pi)
@@ -507,7 +578,7 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	all := sess.FuncBPs()
 	dapBPs := make([]godap.FunctionBreakpoint, 0, len(all))
 	for _, b := range all {
-		fbp := godap.FunctionBreakpoint{Name: b.Name}
+		fbp := godap.FunctionBreakpoint{Name: normalizeFuncBPName(sess.Lang, b.Name)}
 		if b.Condition != "" {
 			fbp.Condition = b.Condition
 		}
@@ -532,6 +603,46 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 		Function:  bp.Name,
 		Condition: bp.Condition,
 	})
+}
+
+// normalizeFuncBPName adapts a user-supplied function-breakpoint name to the
+// format expected by the language adapter.
+//
+// The Java adapter (com.microsoft.java.debug.core's SetFunctionBreakpointsRequestHandler)
+// expects names in the form "FullyQualifiedClass#method"; it splits on '#' and
+// silently produces an unverified breakpoint if exactly two non-blank segments
+// are not present. Users naturally type "Class.method" (mirroring source code),
+// so for Java we translate the final '.' separator to '#'. We also strip any
+// "(...)" argument-signature suffix because the adapter doesn't accept it and
+// would treat the parentheses as part of the method name.
+//
+// For non-Java sessions the name is returned unchanged: the Python (debugpy)
+// and Go (dlv) adapters both accept dot-qualified names directly.
+func normalizeFuncBPName(lang, name string) string {
+	if name == "" {
+		return name
+	}
+	if lang != "java" {
+		return name
+	}
+	// Drop method-arg signature, e.g. "Foo.bar(int)" -> "Foo.bar".
+	if i := strings.IndexByte(name, '('); i >= 0 {
+		name = strings.TrimSpace(name[:i])
+	}
+	// If the user already used the adapter's native separator, pass through.
+	if strings.Contains(name, "#") {
+		return name
+	}
+	// Convert the final '.' (which separates class from method) into '#'.
+	// "com.example.Foo.bar" -> "com.example.Foo#bar". For nested types
+	// (Outer.Inner), the user must spell the class half with '$' and the
+	// adapter separator explicitly, i.e. "Outer$Inner#method", because JDI
+	// uses '$' for the inner-class delimiter and we can't distinguish
+	// package segments from outer-class segments by name alone.
+	if i := strings.LastIndexByte(name, '.'); i > 0 && i < len(name)-1 {
+		return name[:i] + "#" + name[i+1:]
+	}
+	return name
 }
 
 // ----- break-ex -----

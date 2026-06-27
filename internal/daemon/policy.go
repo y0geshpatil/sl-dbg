@@ -23,7 +23,9 @@
 //                                only real security boundary against
 //                                LLM-driven MCP callers; the daemon cannot
 //                                tell CLI vs MCP traffic apart on the socket,
-//                                so the knob is daemon-wide. Issue #54.
+//                                so the knob is daemon-wide. `sl-dbg mcp
+//                                --safe` keeps this unset; pass --allow-eval
+//                                to opt in. Issue #53 / #54.
 //   SL_DBG_DENY_EVAL_PATTERNS  — colon-separated substring list applied AFTER
 //                                SL_DBG_ALLOW_EVAL=1 lets the call through.
 //                                NOT a security boundary — a literal token
@@ -34,6 +36,9 @@
 //                                Defaults to a hardcoded list of Java
 //                                side-effect classes. Set to "-" to disable.
 //                                Issue #19 / #54.
+//   SL_DBG_INSECURE            — boolean. When set, `sl-dbg mcp` will start
+//                                without --safe (legacy permissive mode).
+//                                Prints a loud startup banner. Issue #53.
 package daemon
 
 import (
@@ -55,7 +60,7 @@ type Policy struct {
 	AllowSourceRoot  []string // absolute path prefixes (cleaned)
 	MaxSessions      int      // 0 = unlimited
 	AuditLogPath     string   // "" = no audit
-	AllowEval        bool     // SL_DBG_ALLOW_EVAL; default false = deny eval/set/conditional-bp
+	AllowEval        bool     // SL_DBG_ALLOW_EVAL; default false = deny eval/set/conditional-bp (issue #53/#54)
 	DenyEvalPatterns []string // substring matches against eval expression (NOT a security boundary)
 }
 

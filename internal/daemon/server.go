@@ -456,7 +456,13 @@ func (s *Server) handleState(req proto.Request) proto.Response {
 	// the terminal facts (state, reason, exitCode).
 	if st == string(session.StateExited) || st == string(session.StateTerminated) {
 		pi := proto.PauseInfo{State: st, Reason: st}
-		if ec := sess.ExitCode(); ec != nil {
+		if reason, ec, sig, ok := sess.LastTerminal(); ok {
+			if reason != "" {
+				pi.Reason = reason
+			}
+			pi.ExitCode = ec
+			pi.Signal = sig
+		} else if ec := sess.ExitCode(); ec != nil {
 			pi.ExitCode = ec
 		}
 		return ok(pi)
@@ -1024,6 +1030,16 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if err != nil {
 		return s.sessionNotFound(req.Sess, err.Error())
 	}
+	// Issue #56 (security): expression-form eval permits arbitrary side
+	// effects (Python `__import__('os').system(...)`, Java static-method
+	// calls, Go DAP `call` semantics). Refuse against a read-only session
+	// — match the MCP transport, which hides `debug_eval` under --read-only.
+	// Check the per-session gate before the daemon-wide AllowEval check so
+	// the response code reflects the session's posture when both fire.
+	if rerr := refuseIfReadOnly(sess); rerr != nil {
+		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": "read_only"})
+		return *rerr
+	}
 	// Policy: eval must be explicitly enabled on the daemon (#54). The
 	// substring deny-list (#19) is a secondary CLI typo-guard, NOT a
 	// security boundary — it is trivially bypassable via reflection.
@@ -1032,22 +1048,18 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 		return errResp("EVAL_DISABLED", err.Error(),
 			"start the daemon with SL_DBG_ALLOW_EVAL=1 to permit eval (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
 	}
+	// Policy: eval deny-list (#19). Substring-match defeats the obvious
+	// Java side-effect classes that bypass the `context: "watch"` hint.
 	if err := s.policy.EvalAllowed(args.Expression); err != nil {
 		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": err.Error()})
 		return errResp("EVAL_DENIED", err.Error(),
 			"the daemon blocks this expression via SL_DBG_DENY_EVAL_PATTERNS. Set the env var to '-' to disable, or remove the deny-listed token.")
-	}
-	if sess.ReadOnly {
-		// Allow watch context but not repl (repl can mutate state).
 	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	context_ := "repl"
-	if sess.ReadOnly {
-		context_ = "watch"
-	}
 	if args.TimeoutSec > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec*float64(time.Second)))

@@ -8,11 +8,36 @@ import (
 	"testing"
 )
 
+// defaultArgs mirrors what the CLI writes for `sl-dbg mcp install` without
+// flag overrides: --safe so the daemon stays secure-by-default, plus a
+// wide-open --allow-program so the registered entry still launches.
+var defaultArgs = buildMCPInvocationArgs(nil, false, false)
+
+func TestBuildMCPInvocationArgs(t *testing.T) {
+	got := buildMCPInvocationArgs(nil, false, false)
+	want := []string{"mcp", "--safe", "--allow-program", "*"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("default args mismatch:\n  got:  %v\n  want: %v", got, want)
+	}
+
+	got = buildMCPInvocationArgs([]string{"/usr/local/bin/app", "/opt/svc"}, true, false)
+	want = []string{"mcp", "--safe", "--read-only", "--allow-program", "/usr/local/bin/app", "--allow-program", "/opt/svc"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("custom args mismatch:\n  got:  %v\n  want: %v", got, want)
+	}
+
+	got = buildMCPInvocationArgs(nil, false, true)
+	want = []string{"mcp"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("insecure args mismatch:\n  got:  %v\n  want: %v", got, want)
+	}
+}
+
 func TestInstallJSON_FreshFile(t *testing.T) {
 	dir := t.TempDir()
 	target := agentTarget{name: "claude", kind: "json", path: filepath.Join(dir, "claude_desktop_config.json"), create: true}
 
-	if err := installJSON(target, "/usr/local/bin/sl-dbg", "sl-dbg", false, false); err != nil {
+	if err := installJSON(target, "/usr/local/bin/sl-dbg", defaultArgs, "sl-dbg", false, false); err != nil {
 		t.Fatalf("installJSON: %v", err)
 	}
 
@@ -29,6 +54,10 @@ func TestInstallJSON_FreshFile(t *testing.T) {
 	if entry["command"] != "/usr/local/bin/sl-dbg" {
 		t.Fatalf("command not set: %v", entry)
 	}
+	args, _ := entry["args"].([]any)
+	if len(args) != 4 || args[0] != "mcp" || args[1] != "--safe" || args[2] != "--allow-program" || args[3] != "*" {
+		t.Fatalf("default args not written as --safe --allow-program *: %v", args)
+	}
 }
 
 func TestInstallJSON_PreservesExisting(t *testing.T) {
@@ -40,7 +69,7 @@ func TestInstallJSON_PreservesExisting(t *testing.T) {
 	}
 	target := agentTarget{name: "claude", kind: "json", path: path, create: true}
 
-	if err := installJSON(target, "/bin/sl-dbg", "sl-dbg", false, false); err != nil {
+	if err := installJSON(target, "/bin/sl-dbg", defaultArgs, "sl-dbg", false, false); err != nil {
 		t.Fatalf("installJSON: %v", err)
 	}
 
@@ -67,7 +96,7 @@ func TestInstallJSON_RefusesOverwriteWithoutForce(t *testing.T) {
 	_ = os.WriteFile(path, []byte(pre), 0o600)
 	target := agentTarget{name: "x", kind: "json", path: path, create: true}
 
-	err := installJSON(target, "/new", "sl-dbg", false, false)
+	err := installJSON(target, "/new", defaultArgs, "sl-dbg", false, false)
 	if err == nil {
 		t.Fatal("expected refusal without --force")
 	}
@@ -75,7 +104,7 @@ func TestInstallJSON_RefusesOverwriteWithoutForce(t *testing.T) {
 		t.Fatalf("wrong error: %v", err)
 	}
 	// Force overwrites.
-	if err := installJSON(target, "/new", "sl-dbg", true, false); err != nil {
+	if err := installJSON(target, "/new", defaultArgs, "sl-dbg", true, false); err != nil {
 		t.Fatalf("force install failed: %v", err)
 	}
 	data, _ := os.ReadFile(path)
@@ -89,7 +118,7 @@ func TestInstallJSON_BackupCreated(t *testing.T) {
 	path := filepath.Join(dir, "config.json")
 	_ = os.WriteFile(path, []byte(`{"mcpServers":{}}`), 0o600)
 	target := agentTarget{name: "x", kind: "json", path: path, create: true}
-	if err := installJSON(target, "/bin/sl-dbg", "sl-dbg", false, false); err != nil {
+	if err := installJSON(target, "/bin/sl-dbg", defaultArgs, "sl-dbg", false, false); err != nil {
 		t.Fatal(err)
 	}
 	entries, _ := os.ReadDir(dir)
@@ -110,7 +139,7 @@ func TestInstallTOML_AppendsStanza(t *testing.T) {
 	_ = os.WriteFile(path, []byte("[model]\nname = \"gpt-5\"\n"), 0o600)
 	target := agentTarget{name: "codex", kind: "toml", path: path, create: true}
 
-	if err := installTOML(target, "/usr/local/bin/sl-dbg", "sl-dbg", false, false); err != nil {
+	if err := installTOML(target, "/usr/local/bin/sl-dbg", defaultArgs, "sl-dbg", false, false); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(path)
@@ -133,10 +162,10 @@ func TestInstallTOML_ForceReplaces(t *testing.T) {
 	_ = os.WriteFile(path, []byte(pre), 0o600)
 	target := agentTarget{name: "codex", kind: "toml", path: path, create: true}
 
-	if err := installTOML(target, "/new", "sl-dbg", false, false); err == nil {
+	if err := installTOML(target, "/new", defaultArgs, "sl-dbg", false, false); err == nil {
 		t.Fatal("expected refusal without --force")
 	}
-	if err := installTOML(target, "/new", "sl-dbg", true, false); err != nil {
+	if err := installTOML(target, "/new", defaultArgs, "sl-dbg", true, false); err != nil {
 		t.Fatal(err)
 	}
 	out, _ := os.ReadFile(path)
@@ -173,10 +202,110 @@ func TestDryRun_DoesNotWrite(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 	target := agentTarget{name: "x", kind: "json", path: path, create: true}
-	if err := installJSON(target, "/bin/sl-dbg", "sl-dbg", false, true); err != nil {
+	if err := installJSON(target, "/bin/sl-dbg", defaultArgs, "sl-dbg", false, true); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("dry-run wrote a file: %v", err)
+	}
+}
+
+func TestUninstallJSON_RemovesOnlyOurEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	pre := `{"mcpServers":{"sl-dbg":{"command":"x","args":["mcp"]},"other":{"command":"y"}},"window":{"width":900}}`
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	servers := doc["mcpServers"].(map[string]any)
+	if _, ok := servers["sl-dbg"]; ok {
+		t.Errorf("sl-dbg entry not removed: %s", data)
+	}
+	if _, ok := servers["other"]; !ok {
+		t.Errorf("sibling entry removed: %s", data)
+	}
+	if doc["window"] == nil {
+		t.Errorf("unrelated top-level key lost: %s", data)
+	}
+}
+
+func TestUninstallJSON_DropsEmptyMcpServersBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(path, []byte(`{"mcpServers":{"sl-dbg":{"command":"x"}},"theme":"dark"}`), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	if _, ok := doc["mcpServers"]; ok {
+		t.Errorf("empty mcpServers block kept: %s", data)
+	}
+	if doc["theme"] != "dark" {
+		t.Errorf("unrelated key lost: %s", data)
+	}
+}
+
+func TestUninstallJSON_NoFile(t *testing.T) {
+	target := agentTarget{name: "x", kind: "json", path: filepath.Join(t.TempDir(), "missing.json"), create: true}
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatalf("missing file should be a no-op, got %v", err)
+	}
+}
+
+func TestUninstallJSON_NotPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(path, []byte(`{"mcpServers":{"other":{"command":"y"}}}`), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	pre, _ := os.ReadFile(path)
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	post, _ := os.ReadFile(path)
+	if string(pre) != string(post) {
+		t.Errorf("file changed when entry was absent:\nbefore: %s\nafter:  %s", pre, post)
+	}
+}
+
+func TestUninstallTOML_RemovesStanza(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	pre := "[model]\nname = \"x\"\n\n[mcp_servers.sl-dbg]\ncommand = \"/bin/sl-dbg\"\nargs = [\"mcp\"]\n\n[other]\nz = 1\n"
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "codex", kind: "toml", path: path, create: true}
+	if err := uninstallTOML(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	s := string(out)
+	if strings.Contains(s, "mcp_servers.sl-dbg") {
+		t.Errorf("stanza not removed:\n%s", s)
+	}
+	if !strings.Contains(s, "[model]") || !strings.Contains(s, "[other]") {
+		t.Errorf("siblings removed:\n%s", s)
+	}
+}
+
+func TestUninstall_DryRunDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	pre := `{"mcpServers":{"sl-dbg":{"command":"x"}}}`
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	if err := uninstallJSON(target, "sl-dbg", true); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != pre {
+		t.Errorf("dry-run mutated file:\n%s", data)
 	}
 }

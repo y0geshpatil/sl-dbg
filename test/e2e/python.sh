@@ -90,6 +90,23 @@ contains "$OUT" '"state":"exited"'
 echo "== stop =="
 "$SLDBG" stop >/dev/null
 
+# Issue #56 (security): --read-only must refuse `eval`, not just mutators.
+echo "== read-only blocks eval (issue #56) =="
+"$SLDBG" stop 2>/dev/null || true
+OUT=$("$SLDBG" start --lang python --program "$PROG" --stop-on-entry --read-only)
+contains "$OUT" '"state":"paused"'
+# Sanity: a known mutator is rejected.
+SET_OUT=$("$SLDBG" set x 99 2>&1 || true)
+contains "$SET_OUT" 'READ_ONLY_MODE'
+# The fix: eval must also be rejected with READ_ONLY_MODE.
+EVAL_OUT=$("$SLDBG" eval "__import__('os').system('touch /tmp/sl_dbg_pwn_check')" 2>&1 || true)
+contains "$EVAL_OUT" 'READ_ONLY_MODE'
+if [[ -e /tmp/sl_dbg_pwn_check ]]; then
+  fail "read-only eval executed side effect (touched /tmp/sl_dbg_pwn_check)"
+  rm -f /tmp/sl_dbg_pwn_check
+fi
+"$SLDBG" stop >/dev/null
+
 if [[ $FAIL -gt 0 ]]; then
   echo "== $FAIL check(s) failed =="
   exit 1

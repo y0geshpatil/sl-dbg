@@ -126,6 +126,23 @@ func TestPolicyEvalAllowed(t *testing.T) {
 	}
 }
 
+func TestPolicyEvalDisabled(t *testing.T) {
+	// Default-deny (AllowEval=false) blocks every expression at EvalEnabled.
+	p := Policy{}
+	if err := p.EvalEnabled(); err == nil {
+		t.Errorf("default-deny policy must refuse eval")
+	}
+	// LoadPolicyFromEnv honours SL_DBG_ALLOW_EVAL=0 (i.e. unset/falsy → deny).
+	t.Setenv("SL_DBG_ALLOW_EVAL", "0")
+	q := LoadPolicyFromEnv()
+	if q.AllowEval {
+		t.Errorf("SL_DBG_ALLOW_EVAL=0 must leave AllowEval=false")
+	}
+	if err := q.EvalEnabled(); err == nil {
+		t.Errorf("loaded policy with AllowEval=false must refuse eval")
+	}
+}
+
 func TestLoadPolicyFromEnv(t *testing.T) {
 	t.Setenv("SL_DBG_ALLOW_PROGRAM", "java:python3")
 	t.Setenv("SL_DBG_ALLOW_SOURCE_ROOT", "/tmp/work:/tmp/src")

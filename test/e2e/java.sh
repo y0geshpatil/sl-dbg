@@ -69,6 +69,14 @@ echo "== eval: string concat =="
 OUT=$("$SLDBG" eval '"x=" + item')
 contains "$OUT" '"result":"\\\"x=-1\\\""'
 
+echo "== break-fn (Class.method form gets normalized to Class#method) =="
+# Buggy is already loaded (we are paused inside Buggy.process), so the
+# adapter must verify the function breakpoint immediately. Regression test
+# for issue #59: pre-fix this stayed verified:false forever.
+OUT=$("$SLDBG" break-fn "Buggy.compute")
+contains "$OUT" '"function":"Buggy.compute"'
+contains "$OUT" '"verified":true'
+
 echo "== watch --add =="
 OUT=$("$SLDBG" watch --add "item")
 contains "$OUT" '"result":"-1"'
