@@ -116,9 +116,9 @@ func Run() error {
 	if srv.policy.MaxSessions > 0 {
 		srv.mgr.SetMaxSessions(srv.policy.MaxSessions)
 	}
-	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q deny_eval_patterns=%d",
+	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q allow_eval=%t deny_eval_patterns=%d",
 		len(srv.policy.AllowProgram), len(srv.policy.AllowSourceRoot), srv.policy.MaxSessions,
-		srv.policy.AuditLogPath, len(srv.policy.DenyEvalPatterns))
+		srv.policy.AuditLogPath, srv.policy.AllowEval, len(srv.policy.DenyEvalPatterns))
 
 	// Refuse to start if another daemon is alive.
 	stalePid := 0
@@ -482,6 +482,15 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
+	}
+	// Policy: a breakpoint condition is an expression the adapter will
+	// evaluate every time the line is hit. Issue #54.
+	if args.Condition != "" {
+		if err := s.policy.EvalEnabled(); err != nil {
+			s.audit.Log("break.disabled", sess.ID, map[string]interface{}{"location": args.Location, "condition": args.Condition})
+			return errResp("EVAL_DISABLED", err.Error(),
+				"conditional breakpoints evaluate code at the target; start the daemon with SL_DBG_ALLOW_EVAL=1, or omit --condition")
+		}
 	}
 	file, line, err := parseLocation(args.Location)
 	if err != nil {
@@ -1015,8 +1024,14 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if err != nil {
 		return s.sessionNotFound(req.Sess, err.Error())
 	}
-	// Policy: eval deny-list (#19). Substring-match defeats the obvious
-	// Java side-effect classes that bypass the `context: "watch"` hint.
+	// Policy: eval must be explicitly enabled on the daemon (#54). The
+	// substring deny-list (#19) is a secondary CLI typo-guard, NOT a
+	// security boundary — it is trivially bypassable via reflection.
+	if err := s.policy.EvalEnabled(); err != nil {
+		s.audit.Log("eval.disabled", sess.ID, map[string]interface{}{"expr": args.Expression})
+		return errResp("EVAL_DISABLED", err.Error(),
+			"start the daemon with SL_DBG_ALLOW_EVAL=1 to permit eval (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
+	}
 	if err := s.policy.EvalAllowed(args.Expression); err != nil {
 		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": err.Error()})
 		return errResp("EVAL_DENIED", err.Error(),
@@ -1100,6 +1115,13 @@ func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Respons
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
+	}
+	// Policy: `set` mutates target state via the adapter's expression
+	// evaluator and is treated as eval for SL_DBG_ALLOW_EVAL purposes (#54).
+	if err := s.policy.EvalEnabled(); err != nil {
+		s.audit.Log("set.disabled", sess.ID, map[string]interface{}{"name": args.Name, "value": args.Value})
+		return errResp("EVAL_DISABLED", err.Error(),
+			"start the daemon with SL_DBG_ALLOW_EVAL=1 to permit set (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
 	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {

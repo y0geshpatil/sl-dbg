@@ -57,6 +57,50 @@ func TestPolicySourcePathAllowed(t *testing.T) {
 	}
 }
 
+func TestPolicyEvalEnabled(t *testing.T) {
+	// Default: eval is disabled (issue #54 — secure-by-default).
+	if err := (Policy{}).EvalEnabled(); err == nil {
+		t.Errorf("zero-value Policy must deny eval; got nil error")
+	}
+	if err := (Policy{AllowEval: true}).EvalEnabled(); err != nil {
+		t.Errorf("AllowEval=true must permit, got %v", err)
+	}
+}
+
+func TestParseBoolEnv(t *testing.T) {
+	truthy := []string{"1", "true", "TRUE", "True", "yes", "YES", "on", " 1 "}
+	falsy := []string{"", "0", "false", "no", "off", "maybe", "2", "asdf"}
+	for _, s := range truthy {
+		if !parseBoolEnv(s) {
+			t.Errorf("parseBoolEnv(%q) = false, want true", s)
+		}
+	}
+	for _, s := range falsy {
+		if parseBoolEnv(s) {
+			t.Errorf("parseBoolEnv(%q) = true, want false (default-deny)", s)
+		}
+	}
+}
+
+func TestLoadPolicyAllowEvalDefault(t *testing.T) {
+	// Without SL_DBG_ALLOW_EVAL, AllowEval must be false (default-deny).
+	t.Setenv("SL_DBG_ALLOW_EVAL", "")
+	p := LoadPolicyFromEnv()
+	if p.AllowEval {
+		t.Errorf("default AllowEval must be false; got true")
+	}
+	t.Setenv("SL_DBG_ALLOW_EVAL", "1")
+	p = LoadPolicyFromEnv()
+	if !p.AllowEval {
+		t.Errorf("SL_DBG_ALLOW_EVAL=1 must enable eval")
+	}
+	t.Setenv("SL_DBG_ALLOW_EVAL", "no")
+	p = LoadPolicyFromEnv()
+	if p.AllowEval {
+		t.Errorf("SL_DBG_ALLOW_EVAL=no must disable eval")
+	}
+}
+
 func TestPolicyEvalAllowed(t *testing.T) {
 	p := Policy{DenyEvalPatterns: []string{"FileOutputStream", "Runtime.getRuntime"}}
 	if err := p.EvalAllowed("user.name + 1"); err != nil {

@@ -337,7 +337,8 @@ Or on error:
 | `TIMEOUT` | Operation exceeded its `--timeout` | Raise `--timeout` |
 | `PROGRAM_NOT_ALLOWED` | `debug_start`: program path not in `SL_DBG_ALLOW_PROGRAM` allowlist | Add program to allowlist or unset env var |
 | `SOURCE_PATH_DENIED` | `debug_source`: file outside `SL_DBG_ALLOW_SOURCE_ROOT` and not under the session's own roots | Add parent dir to allowlist or include in `sourceRoots` |
-| `EVAL_DENIED` | `debug_eval`: expression matched `SL_DBG_DENY_EVAL_PATTERNS` | Rephrase, or set `SL_DBG_DENY_EVAL_PATTERNS=-` |
+| `EVAL_DISABLED` | `debug_eval` / `debug_set` / `debug_watch add` / `debug_break --condition`: the daemon is running without `SL_DBG_ALLOW_EVAL=1` (default-deny). | Restart the daemon with `SL_DBG_ALLOW_EVAL=1` (and `SL_DBG_AUDIT_LOG=…` for an audit trail) |
+| `EVAL_DENIED` | `debug_eval`: expression matched `SL_DBG_DENY_EVAL_PATTERNS`. **Not a security boundary** — see `SL_DBG_ALLOW_EVAL`. | Rephrase, or set `SL_DBG_DENY_EVAL_PATTERNS=-` |
 | `RESOURCE_EXHAUSTED` | `debug_start`/`debug_attach`: daemon at `SL_DBG_MAX_SESSIONS` cap | Stop another session or raise the cap |
 
 ### Security policy (env vars)
@@ -350,7 +351,8 @@ The daemon reads these at startup. All are optional; defaults preserve legacy be
 | `SL_DBG_ALLOW_SOURCE_ROOT` | Colon-separated absolute-path roots that `debug_source` may read. The session's own `sourceRoots`/`cwd`/program dir are always trusted. | #18 |
 | `SL_DBG_MAX_SESSIONS` | Cap on concurrent sessions in the daemon. `0` (default) = unlimited. | #22 |
 | `SL_DBG_AUDIT_LOG` | Path. When set, every `start`/`attach`/`eval`/`set` is appended as one NDJSON line (`ts`, `event`, `session`, `args`). | #23 |
-| `SL_DBG_DENY_EVAL_PATTERNS` | Colon-separated substring deny list for `debug_eval` expressions. Default hardcoded list blocks the obvious Java side-effect classes (`FileOutputStream`, `Runtime.getRuntime`, …). Set to `-` to disable. | #19 |
+| `SL_DBG_ALLOW_EVAL` | Boolean (`1`/`true`/`yes`/`on`). When unset or falsy (**default**), every code-evaluating command — `debug_eval`, `debug_set`, `debug_watch add`, and any `debug_break*` with `--condition` — is rejected with `EVAL_DISABLED`. This is the only real security boundary against LLM-driven MCP callers; the daemon cannot tell CLI vs MCP traffic apart on the socket, so the knob is daemon-wide. Pair with `SL_DBG_AUDIT_LOG` when enabling. | #54 |
+| `SL_DBG_DENY_EVAL_PATTERNS` | Colon-separated substring deny list for `debug_eval` expressions, applied **after** `SL_DBG_ALLOW_EVAL=1` lets the call through. Default hardcoded list blocks the obvious Java side-effect classes (`FileOutputStream`, `Runtime.getRuntime`, …). Set to `-` to disable. **Not a security boundary** — trivially bypassable via reflection / dunder traversal / `getattr`. Kept only as a typo-guard convenience. | #19 / #54 |
 
 ## Schema / Versioning Policy
 

@@ -84,6 +84,13 @@ func (s *Server) handleWatch(ctx context.Context, req proto.Request) proto.Respo
 		if args.Expression == "" {
 			return errResp("USAGE_ERROR", "watch add requires an expression", "")
 		}
+		// Policy: a watch expression is evaluated every time the session
+		// pauses, so adding one is equivalent to running eval. Issue #54.
+		if err := s.policy.EvalEnabled(); err != nil {
+			s.audit.Log("watch.disabled", sess.ID, map[string]interface{}{"expr": args.Expression})
+			return errResp("EVAL_DISABLED", err.Error(),
+				"start the daemon with SL_DBG_ALLOW_EVAL=1 to add watch expressions (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
+		}
 		sess.AddWatch(args.Expression)
 		return ok(proto.WatchResult{Watches: s.evaluateWatches(ctx, sess, args.Frame)})
 	case "remove":
@@ -475,6 +482,13 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
+	}
+	if args.Condition != "" {
+		if err := s.policy.EvalEnabled(); err != nil {
+			s.audit.Log("break-fn.disabled", sess.ID, map[string]interface{}{"function": args.Function, "condition": args.Condition})
+			return errResp("EVAL_DISABLED", err.Error(),
+				"conditional breakpoints evaluate code at the target; start the daemon with SL_DBG_ALLOW_EVAL=1, or omit --condition")
+		}
 	}
 	if !sess.Caps().SupportsFunctionBreakpoints {
 		return errResp("UNSUPPORTED_FEATURE",
