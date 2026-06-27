@@ -423,9 +423,26 @@ func (s *Server) handleListen(ctx context.Context, req proto.Request) proto.Resp
 	// though there was nothing to wait for — every subsequent inspection
 	// call already had its location available via LastPause.
 	if st := sess.State(); st == session.StatePaused || st == session.StateExited || st == session.StateTerminated {
+		if st == session.StateExited || st == session.StateTerminated {
+			// Don't use LastPause() here — that returns the most recent
+			// *pause* (e.g. "entry"), which is stale once the session
+			// has terminated. Use the cached terminal event so callers
+			// see the same reason/exitCode/signal that `state` reports.
+			pi := proto.PauseInfo{State: string(st), Reason: string(st)}
+			if reason, ec, sig, ok := sess.LastTerminal(); ok {
+				if reason != "" {
+					pi.Reason = reason
+				}
+				pi.ExitCode = ec
+				pi.Signal = sig
+			} else if ec := sess.ExitCode(); ec != nil {
+				pi.ExitCode = ec
+			}
+			return ok(pi)
+		}
 		reason, hitBP, loc := sess.LastPause()
 		pi := proto.PauseInfo{State: string(st), Reason: reason, HitBP: hitBP, Location: loc}
-		if st == session.StatePaused && reason == "" {
+		if reason == "" {
 			pi.Reason = "already-paused"
 		}
 		return ok(pi)

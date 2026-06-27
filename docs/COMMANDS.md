@@ -98,6 +98,11 @@ When the session has terminated, `location`, `thread`, and the pause `reason` ar
 ```json
 {"ok":true,"data":{"state":"exited","reason":"exited","exitCode":0}}
 ```
+If the adapter (or target through the adapter) died from an OS signal, the response surfaces it explicitly so callers don't have to decode an "exit code looks signal-shaped" heuristic:
+```json
+{"ok":true,"data":{"state":"terminated","reason":"signal","signal":"killed","exitCode":137}}
+```
+`sl-dbg listen` returns the same terminal shape when invoked against an already-exited/terminated session — `state` and `listen` never disagree on `reason`, `exitCode`, or `signal` for the same session.
 
 ---
 

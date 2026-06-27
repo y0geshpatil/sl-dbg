@@ -456,7 +456,13 @@ func (s *Server) handleState(req proto.Request) proto.Response {
 	// the terminal facts (state, reason, exitCode).
 	if st == string(session.StateExited) || st == string(session.StateTerminated) {
 		pi := proto.PauseInfo{State: st, Reason: st}
-		if ec := sess.ExitCode(); ec != nil {
+		if reason, ec, sig, ok := sess.LastTerminal(); ok {
+			if reason != "" {
+				pi.Reason = reason
+			}
+			pi.ExitCode = ec
+			pi.Signal = sig
+		} else if ec := sess.ExitCode(); ec != nil {
 			pi.ExitCode = ec
 		}
 		return ok(pi)
