@@ -368,6 +368,8 @@ The daemon reads these at startup. All are optional; defaults preserve legacy be
 | `SL_DBG_INSECURE` | When set to `1`, `sl-dbg mcp` will start without `--safe`, restoring legacy permissive defaults. Prints a loud startup banner listing the open guards. **Not for unattended LLM use.** | #53 |
 | `SL_DBG_PPROF` | Diagnostic-only. When set to a bind address (e.g. `:6060` or `127.0.0.1:6060`), the daemon serves Go's standard `net/http/pprof` endpoints on that address. Off by default — never bind a port unless explicitly opted in. Useful for capturing heap / goroutine snapshots when investigating leaks. | #45 |
 
+The daemon also sources `$XDG_STATE_HOME/sl-dbg/safe-policy.env` (or `~/.local/state/sl-dbg/safe-policy.env`) at startup. This file is written by `sl-dbg mcp --safe` so a daemon respawned by an unrelated CLI invocation (which lacks the `SL_DBG_*` env vars the safe process exported) still loads the operator's safe policy. Pre-existing environment variables take precedence over the file. Only keys prefixed with `SL_DBG_` are honoured. Issue #69.
+
 ## Schema / Versioning Policy
 
 Every JSON response includes a `"schema": "1"` marker. The contract for `schema:"1"`:

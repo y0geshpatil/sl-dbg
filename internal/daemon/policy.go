@@ -65,7 +65,11 @@ type Policy struct {
 }
 
 // LoadPolicyFromEnv builds a Policy from the SL_DBG_* environment variables.
+// Before reading the environment it sources any persisted --safe policy file
+// (written by `sl-dbg mcp --safe`) so a daemon respawned by an unrelated CLI
+// invocation does not silently downgrade to an empty policy. Issue #69.
 func LoadPolicyFromEnv() Policy {
+	loadSafePolicyFile()
 	p := Policy{
 		AllowProgram:    splitColonList(os.Getenv("SL_DBG_ALLOW_PROGRAM")),
 		AllowSourceRoot: cleanAbs(splitColonList(os.Getenv("SL_DBG_ALLOW_SOURCE_ROOT"))),
@@ -259,4 +263,50 @@ func (a *AuditLogger) Close() {
 	defer a.mu.Unlock()
 	_ = a.file.Close()
 	a.file = nil
+}
+
+// safePolicyFilePath mirrors cli.SafePolicyFilePath() — duplicated here to
+// avoid a daemon→cli import cycle. Both must agree on the on-disk location.
+// Issue #69.
+func safePolicyFilePath() string {
+	if v := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); v != "" {
+		return filepath.Join(v, "sl-dbg", "safe-policy.env")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "state", "sl-dbg", "safe-policy.env")
+	}
+	return filepath.Join(os.TempDir(), "sl-dbg-safe-policy.env")
+}
+
+// loadSafePolicyFile sources KEY=VALUE pairs from the persisted --safe
+// policy file (if present) into the process environment, so a daemon
+// respawned by an unrelated CLI invocation still honors the policy the
+// operator set with `sl-dbg mcp --safe`. Pre-existing env vars take
+// precedence — explicit caller intent wins over the cached file.
+// Best-effort: any IO/parse error leaves env untouched. Issue #69.
+func loadSafePolicyFile() {
+	path := safePolicyFilePath()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq <= 0 {
+			continue
+		}
+		key := strings.TrimSpace(line[:eq])
+		val := line[eq+1:]
+		if !strings.HasPrefix(key, "SL_DBG_") {
+			continue // refuse to source unknown keys
+		}
+		if _, present := os.LookupEnv(key); present {
+			continue // caller env wins
+		}
+		_ = os.Setenv(key, val)
+	}
 }

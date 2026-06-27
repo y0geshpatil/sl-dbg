@@ -178,7 +178,56 @@ func applyMCPSafePolicy(p mcpSafePolicy, w io.Writer) error {
 	for k, v := range p.EnvUpdates {
 		_ = os.Setenv(k, v)
 	}
+	// Persist the policy to disk so a daemon respawned by an unrelated CLI
+	// invocation (which lacks our env vars) still loads the safe policy.
+	// Without this, `sl-dbg sessions` from another terminal would auto-spawn
+	// an empty-policy replacement after a safe daemon dies — silently
+	// downgrading the security boundary the operator asked for. Issue #69.
+	if len(p.EnvUpdates) > 0 {
+		_ = writeSafePolicyFile(p.EnvUpdates)
+	}
 	return nil
+}
+
+// SafePolicyFilePath returns the on-disk location of the persisted --safe
+// policy. Public so the daemon's LoadPolicyFromEnv can find the same file
+// without depending on the CLI package.
+func SafePolicyFilePath() string {
+	if v := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); v != "" {
+		return filepath.Join(v, "sl-dbg", "safe-policy.env")
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return filepath.Join(home, ".local", "state", "sl-dbg", "safe-policy.env")
+	}
+	return filepath.Join(os.TempDir(), "sl-dbg-safe-policy.env")
+}
+
+// writeSafePolicyFile atomically writes the supplied env-var map as KEY=VALUE
+// lines to SafePolicyFilePath(). The file is mode 0600 so only the owner can
+// read the audit-log path / allowed roots.
+func writeSafePolicyFile(env map[string]string) error {
+	path := SafePolicyFilePath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".safe-policy.*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	for k, v := range env {
+		if _, err := fmt.Fprintf(tmp, "%s=%s\n", k, v); err != nil {
+			_ = tmp.Close()
+			return err
+		}
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // defaultAuditLogPath picks an OS-appropriate location for the audit log.
