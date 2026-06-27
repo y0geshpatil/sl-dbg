@@ -123,12 +123,20 @@ sl-dbg mcp install claude
 # Or print the JSON/TOML snippet to paste yourself
 sl-dbg mcp install --print
 
-# Under the hood, agents launch this — exposes every command as an MCP tool
-sl-dbg mcp
+# Under the hood, agents launch this — exposes every command as an MCP tool.
+# `mcp` refuses to start without --safe (or SL_DBG_INSECURE=1 for local CLI use).
+sl-dbg mcp --safe --allow-program java --allow-program python3
 ```
 `sl-dbg mcp install` does a safe read-merge-write with a timestamped `.bak`
 backup. It refuses to overwrite an existing entry unless `--force` is passed,
 and `--dry-run` shows the diff without touching disk.
+
+The registered command runs `sl-dbg mcp --safe --allow-program *` by
+default — secure-by-default mode (source jail on, eval off, session cap on,
+audit log on). To restrict which binaries the agent may launch via
+`debug_start`, pass `--allow-program /path/to/your/program` (repeatable).
+Pass `--read-only` to register the server with every mutating tool hidden,
+or `--insecure` to fall back to the legacy permissive mode (not recommended).
 
 ### Uninstall
 ```bash

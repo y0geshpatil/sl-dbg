@@ -82,6 +82,23 @@ func TestPolicyEvalAllowed(t *testing.T) {
 	}
 }
 
+func TestPolicyEvalDisabled(t *testing.T) {
+	// EvalDisabled overrides everything: even a benign expression is rejected.
+	p := Policy{EvalDisabled: true}
+	if err := p.EvalAllowed("x + 1"); err == nil {
+		t.Errorf("EvalDisabled must reject all expressions")
+	}
+	// LoadPolicyFromEnv honours SL_DBG_ALLOW_EVAL=0.
+	t.Setenv("SL_DBG_ALLOW_EVAL", "0")
+	q := LoadPolicyFromEnv()
+	if !q.EvalDisabled {
+		t.Errorf("SL_DBG_ALLOW_EVAL=0 must set EvalDisabled=true")
+	}
+	if err := q.EvalAllowed("anything"); err == nil {
+		t.Errorf("loaded policy with EvalDisabled must reject")
+	}
+}
+
 func TestLoadPolicyFromEnv(t *testing.T) {
 	t.Setenv("SL_DBG_ALLOW_PROGRAM", "java:python3")
 	t.Setenv("SL_DBG_ALLOW_SOURCE_ROOT", "/tmp/work:/tmp/src")

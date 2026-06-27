@@ -180,17 +180,40 @@ These are known residual risks or correctness gaps. Some mitigations may land in
 
 ## Hardening Recipe
 
-For a production MCP deployment, prefer a narrow, read-only policy with explicit launch and source allowlists plus an audit trail:
+`sl-dbg mcp` refuses to start with permissive defaults (issue [#53](https://github.com/y0geshpatil/sl-dbg/issues/53)). Choose one of these two modes:
+
+### Recommended: `--safe`
 
 ```bash
-sl-dbg mcp \
-  --read-only \
-  --allow-program "java" \
-  --allow-program "python3" \
+sl-dbg mcp --safe \
+  --allow-program java \
+  --allow-program python3 \
   --allow-source-root ~/work \
   --max-sessions 4 \
   --audit-log ~/.local/state/sl-dbg/audit.log
 ```
+
+`--safe` is a single switch that flips on every server-side guard at once. It exports the equivalent `SL_DBG_*` environment variables into the auto-spawned daemon:
+
+| Flag | Daemon env var | Default under `--safe` |
+|---|---|---|
+| `--allow-program` (required) | `SL_DBG_ALLOW_PROGRAM` | none — must be passed |
+| `--allow-source-root` | `SL_DBG_ALLOW_SOURCE_ROOT` | current working directory |
+| `--max-sessions` | `SL_DBG_MAX_SESSIONS` | `8` |
+| `--audit-log` | `SL_DBG_AUDIT_LOG` | `$XDG_STATE_HOME/sl-dbg/audit.log` |
+| `--allow-eval` (opt-in) | `SL_DBG_ALLOW_EVAL` | `0` (eval disabled) |
+
+Add `--read-only` on top of `--safe` to also hide mutating tools (`start`, `eval`, `set`, `watch add/remove`, execution steps, …) from the MCP surface. This is the strongest posture for unattended LLM clients.
+
+If a daemon is already running with different settings, restart it first:
+
+```bash
+sl-dbg daemon stop
+```
+
+### Opt-out: `SL_DBG_INSECURE=1`
+
+For local single-developer use where the MCP caller is a human-driven editor (not an autonomous agent), set `SL_DBG_INSECURE=1` to re-enable the legacy permissive defaults. The server prints a loud startup banner listing exactly what guards are off. **Never use this mode for unattended LLM workflows.**
 
 Operational notes:
 

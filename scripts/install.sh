@@ -104,6 +104,15 @@ Next steps:
      (Add --dry-run to preview, --force to overwrite an existing entry.
       A timestamped .bak of any existing config is written before the update.)
 
+     Secure-by-default: the registered command runs 'sl-dbg mcp --safe
+     --allow-program *'. That keeps the source-jail on, eval off, session
+     cap on, and audit log on. To restrict which binaries debug_start may
+     spawn, re-run with explicit allowlist entries:
+       sl-dbg mcp install claude --allow-program /path/to/your/program
+     Hide every mutating tool from the agent with:
+       sl-dbg mcp install claude --read-only
+     (--insecure restores the legacy permissive mode; NOT recommended.)
+
   4. Try it:
        sl-dbg start --lang python --program <your-script.py> --stop-on-entry
 
