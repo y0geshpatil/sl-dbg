@@ -47,14 +47,14 @@ Supported agents:
   copilot   GitHub Copilot CLI (~/.config/github-copilot/mcp.json)
   all       Run install for every detected agent on this machine
 
-By default the registered command runs 'sl-dbg mcp --safe --allow-program *'.
-That keeps the daemon in secure-by-default mode (source jail on, eval off,
-session cap on, audit log on) while leaving the program allowlist
-permissive enough that any 'debug_start' call succeeds. Tighten it with
---allow-program /path/to/your/program (repeatable). Use --read-only to
-hide every mutating tool from the agent, or --insecure to register the
-legacy permissive mode (NOT recommended — exports SL_DBG_INSECURE=1
-inside the agent process).
+By default the registered command runs 'sl-dbg mcp --safe', and the daemon
+auto-discovers a tight program allowlist from PATH (java, python3, node,
+dlv). That keeps the daemon in secure-by-default mode (source jail on,
+eval off, session cap on, audit log on) while still letting common
+debugging workflows succeed. Tighten or extend it with --allow-program
+/path/to/your/program (repeatable). Use --read-only to hide every mutating
+tool from the agent, or --insecure to register the legacy permissive mode
+(NOT recommended — exports SL_DBG_INSECURE=1 inside the agent process).
 
 The command does a read-merge-write with a timestamped .bak backup. If an
 entry with the same server id already exists, the command refuses to
@@ -96,9 +96,9 @@ without touching anything.`,
 			if !anyOK {
 				return errors.New("no agents updated")
 			}
-			if !insecure && containsString(mcpArgs, "*") {
+			if !insecure && len(allowProgram) == 0 {
 				fmt.Fprintln(os.Stderr,
-					"note: program allowlist is wide-open ('*'). Re-run with --allow-program /path/to/your/program to lock it down.")
+					"note: --allow-program omitted; the daemon will auto-discover (java, python3, node, dlv) on PATH. Re-run with --allow-program /path/to/your/program to lock it down further.")
 			}
 			return nil
 		},
@@ -116,9 +116,9 @@ without touching anything.`,
 // buildMCPInvocationArgs assembles the argv that the registered agent
 // command will invoke. We always pass --safe so the daemon stays in
 // secure-by-default mode even when the user added the registration via
-// a one-liner; --allow-program defaults to '*' which keeps debug_start
-// working while still exporting SL_DBG_ALLOW_PROGRAM so the operator
-// sees a clear "lock me down" knob to tighten.
+// a one-liner. When the caller does not pass --allow-program, we omit it
+// entirely so the daemon's auto-discovery (issue #70) picks a tight
+// allowlist from PATH — a strict improvement over the v0.5.x '*' default.
 func buildMCPInvocationArgs(allowProgram []string, readOnly, insecure bool) []string {
 	if insecure {
 		// legacy permissive — caller opted out of --safe; SL_DBG_INSECURE is
@@ -133,12 +133,8 @@ func buildMCPInvocationArgs(allowProgram []string, readOnly, insecure bool) []st
 	if readOnly {
 		out = append(out, "--read-only")
 	}
-	if len(allowProgram) == 0 {
-		out = append(out, "--allow-program", "*")
-	} else {
-		for _, p := range allowProgram {
-			out = append(out, "--allow-program", p)
-		}
+	for _, p := range allowProgram {
+		out = append(out, "--allow-program", p)
 	}
 	return out
 }

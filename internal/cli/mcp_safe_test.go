@@ -13,22 +13,53 @@ func fakeEnv(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
-func TestResolveMCPSafePolicy_RefusesWithoutSafeOrInsecure(t *testing.T) {
-	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(nil), "/work")
+// fakeLookpath returns a LookPath-like closure: keys map to absolute paths;
+// missing keys return an error so the tested code knows the binary is absent.
+func fakeLookpath(found map[string]string) func(string) (string, error) {
+	return func(name string) (string, error) {
+		if p, ok := found[name]; ok {
+			return p, nil
+		}
+		return "", os.ErrNotExist
+	}
+}
+
+// noLookpath simulates an empty PATH (nothing discoverable).
+func noLookpath(string) (string, error) { return "", os.ErrNotExist }
+
+func TestResolveMCPSafePolicy_AutoSafeWhenNoFlags(t *testing.T) {
+	// Issue #70: bare `sl-dbg mcp` with no flags and no SL_DBG_INSECURE must
+	// auto-apply --safe, discovering interpreters from PATH.
+	lp := fakeLookpath(map[string]string{"java": "/usr/bin/java", "python3": "/usr/bin/python3"})
+	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(nil), lp, "/work")
+	if pol.Refuse != nil {
+		t.Fatalf("auto-safe must not refuse when interpreters exist on PATH: %v", pol.Refuse)
+	}
+	if got := pol.EnvUpdates["SL_DBG_ALLOW_PROGRAM"]; got == "" || !strings.Contains(got, "java") {
+		t.Errorf("expected auto-discovered SL_DBG_ALLOW_PROGRAM to include java; got %q", got)
+	}
+	joined := strings.Join(pol.Warnings, "\n")
+	if !strings.Contains(joined, "--safe is now the default") {
+		t.Errorf("auto-safe must announce the implicit flip; got:\n%s", joined)
+	}
+	if !strings.Contains(joined, "auto-discovered") {
+		t.Errorf("auto-safe must announce the auto-discovered program list; got:\n%s", joined)
+	}
+}
+
+func TestResolveMCPSafePolicy_AutoSafeRefusesWhenNoInterpretersFound(t *testing.T) {
+	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(nil), noLookpath, "/work")
 	if pol.Refuse == nil {
-		t.Fatalf("expected refusal when neither --safe nor SL_DBG_INSECURE is set")
+		t.Fatalf("auto-safe with empty PATH must refuse with an actionable message")
 	}
-	if !strings.Contains(pol.Refuse.Error(), "--safe") {
-		t.Errorf("refusal should mention --safe; got: %s", pol.Refuse.Error())
-	}
-	if !strings.Contains(pol.Refuse.Error(), "SL_DBG_INSECURE") {
-		t.Errorf("refusal should mention SL_DBG_INSECURE; got: %s", pol.Refuse.Error())
+	if !strings.Contains(pol.Refuse.Error(), "--allow-program") {
+		t.Errorf("refusal should name --allow-program; got: %s", pol.Refuse.Error())
 	}
 }
 
 func TestResolveMCPSafePolicy_InsecureWarnsLoudly(t *testing.T) {
 	env := map[string]string{"SL_DBG_INSECURE": "1"}
-	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(env), "/work")
+	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(env), noLookpath, "/work")
 	if pol.Refuse != nil {
 		t.Fatalf("insecure escape hatch should not refuse: %v", pol.Refuse)
 	}
@@ -43,13 +74,19 @@ func TestResolveMCPSafePolicy_InsecureWarnsLoudly(t *testing.T) {
 	}
 }
 
-func TestResolveMCPSafePolicy_SafeRequiresAllowProgram(t *testing.T) {
-	pol := resolveMCPSafePolicy(mcpSafeFlags{Safe: true}, fakeEnv(nil), "/work")
-	if pol.Refuse == nil {
-		t.Fatalf("safe mode without --allow-program must refuse")
+func TestResolveMCPSafePolicy_SafeAutoDiscoversAllowProgram(t *testing.T) {
+	// Explicit --safe without --allow-program: same auto-discovery path,
+	// but no "default" banner (only the discovered-programs warning).
+	lp := fakeLookpath(map[string]string{"node": "/usr/local/bin/node"})
+	pol := resolveMCPSafePolicy(mcpSafeFlags{Safe: true}, fakeEnv(nil), lp, "/work")
+	if pol.Refuse != nil {
+		t.Fatalf("--safe with PATH-discoverable interpreter must succeed: %v", pol.Refuse)
 	}
-	if !strings.Contains(pol.Refuse.Error(), "--allow-program") {
-		t.Errorf("refusal should name --allow-program; got: %s", pol.Refuse.Error())
+	if pol.EnvUpdates["SL_DBG_ALLOW_PROGRAM"] == "" {
+		t.Errorf("expected auto-discovery to populate SL_DBG_ALLOW_PROGRAM")
+	}
+	if strings.Contains(strings.Join(pol.Warnings, "\n"), "is now the default") {
+		t.Errorf("explicit --safe should NOT print the auto-safe banner")
 	}
 }
 
@@ -58,7 +95,7 @@ func TestResolveMCPSafePolicy_SafeAppliesAllDefaults(t *testing.T) {
 	pol := resolveMCPSafePolicy(mcpSafeFlags{
 		Safe:         true,
 		AllowProgram: []string{"java", "python3"},
-	}, fakeEnv(nil), cwd)
+	}, fakeEnv(nil), noLookpath, cwd)
 	if pol.Refuse != nil {
 		t.Fatalf("safe mode with --allow-program should succeed: %v", pol.Refuse)
 	}
@@ -93,7 +130,7 @@ func TestResolveMCPSafePolicy_SafeHonoursExplicitFlags(t *testing.T) {
 		MaxSessions:     4,
 		AuditLog:        "/var/log/sl-dbg.log",
 		AllowEval:       true,
-	}, fakeEnv(nil), "/work")
+	}, fakeEnv(nil), noLookpath, "/work")
 	if pol.Refuse != nil {
 		t.Fatalf("unexpected refusal: %v", pol.Refuse)
 	}
@@ -110,12 +147,10 @@ func TestResolveMCPSafePolicy_SafeHonoursExplicitFlags(t *testing.T) {
 	if e["SL_DBG_ALLOW_EVAL"] != "1" {
 		t.Errorf("--allow-eval should set SL_DBG_ALLOW_EVAL=1; got %q", e["SL_DBG_ALLOW_EVAL"])
 	}
-	// Warning should call out that eval is re-enabled.
 	joined := strings.Join(pol.Warnings, "\n")
 	if !strings.Contains(joined, "eval` is RE-ENABLED") {
 		t.Errorf("expected loud warning when --allow-eval is set under --safe; got:\n%s", joined)
 	}
-	// And no defaulted-cwd warning since the user passed roots explicitly.
 	if strings.Contains(joined, "defaulted to cwd") {
 		t.Errorf("should not warn about defaulted cwd when --allow-source-root is set")
 	}
@@ -123,7 +158,7 @@ func TestResolveMCPSafePolicy_SafeHonoursExplicitFlags(t *testing.T) {
 
 func TestApplyMCPSafePolicy_WritesWarningsAndReturnsRefuse(t *testing.T) {
 	var buf bytes.Buffer
-	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(nil), "/work")
+	pol := resolveMCPSafePolicy(mcpSafeFlags{}, fakeEnv(nil), noLookpath, "/work")
 	if err := applyMCPSafePolicy(pol, &buf); err == nil {
 		t.Fatalf("expected error from applyMCPSafePolicy with refusal")
 	}

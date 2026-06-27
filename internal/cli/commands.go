@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -775,13 +776,19 @@ func newMCPCmd() *cobra.Command {
 sl-dbg command as an MCP tool. Designed to be wired into Claude Desktop,
 Cursor, Continue, or any MCP-aware client.
 
-SECURITY: this transport refuses to start unless you pass --safe or set
-SL_DBG_INSECURE=1. The MCP caller is a model acting on possibly
-prompt-injected input, and the primitives exposed here (eval, source,
-start --program) are RCE-grade. Default-deny is mandatory.
+SECURITY: --safe is the default as of v0.5.3 (issue #70). A bare
+'sl-dbg mcp' is treated as '--safe' with the program allowlist
+auto-discovered from PATH (java, python3, node, dlv) and the source jail
+rooted at the cwd. Set SL_DBG_INSECURE=1 to opt out into the legacy
+permissive mode (NOT recommended for LLM clients).
 
-Use --safe to enable secure defaults in a single flag. It maps to:
-  SL_DBG_ALLOW_PROGRAM     = --allow-program (required)
+The MCP caller is a model acting on possibly prompt-injected input, and
+the primitives exposed here (eval, source, start --program) are RCE-grade.
+Default-deny is mandatory.
+
+Pass --safe explicitly together with --allow-program to override the
+auto-discovered allowlist. It maps to:
+  SL_DBG_ALLOW_PROGRAM     = --allow-program (auto-discovered when omitted)
   SL_DBG_ALLOW_SOURCE_ROOT = --allow-source-root, defaults to cwd
   SL_DBG_MAX_SESSIONS      = --max-sessions, default 8
   SL_DBG_AUDIT_LOG         = --audit-log, default $XDG_STATE_HOME/sl-dbg/audit.log
@@ -809,7 +816,7 @@ any of the listed case-insensitive substrings outright.`,
 				MaxSessions:     maxSessions,
 				AuditLog:        auditLog,
 				AllowEval:       allowEval,
-			}, os.Getenv, cwd)
+			}, os.Getenv, exec.LookPath, cwd)
 			if err := applyMCPSafePolicy(pol, os.Stderr); err != nil {
 				fmt.Fprintln(os.Stderr, err.Error())
 				// Use a SilenceUsage-style return so cobra doesn't print

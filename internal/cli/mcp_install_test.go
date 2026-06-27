@@ -9,13 +9,14 @@ import (
 )
 
 // defaultArgs mirrors what the CLI writes for `sl-dbg mcp install` without
-// flag overrides: --safe so the daemon stays secure-by-default, plus a
-// wide-open --allow-program so the registered entry still launches.
+// flag overrides: --safe so the daemon stays secure-by-default. Issue #70
+// removed the implicit '*' allowlist; the daemon now auto-discovers from
+// PATH instead, so the default args are just ["mcp", "--safe"].
 var defaultArgs = buildMCPInvocationArgs(nil, false, false)
 
 func TestBuildMCPInvocationArgs(t *testing.T) {
 	got := buildMCPInvocationArgs(nil, false, false)
-	want := []string{"mcp", "--safe", "--allow-program", "*"}
+	want := []string{"mcp", "--safe"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("default args mismatch:\n  got:  %v\n  want: %v", got, want)
 	}
@@ -55,8 +56,8 @@ func TestInstallJSON_FreshFile(t *testing.T) {
 		t.Fatalf("command not set: %v", entry)
 	}
 	args, _ := entry["args"].([]any)
-	if len(args) != 4 || args[0] != "mcp" || args[1] != "--safe" || args[2] != "--allow-program" || args[3] != "*" {
-		t.Fatalf("default args not written as --safe --allow-program *: %v", args)
+	if len(args) != 2 || args[0] != "mcp" || args[1] != "--safe" {
+		t.Fatalf("default args not written as --safe (auto-discovery): %v", args)
 	}
 }
 

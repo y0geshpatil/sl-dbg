@@ -67,10 +67,15 @@ See docs/SECURITY.md for the full threat model.`
 // resolveMCPSafePolicy decides what to do for one `sl-dbg mcp` invocation
 // given the user's flags and the SL_DBG_INSECURE environment escape hatch.
 //
-// `getenv` is injected for testability; pass os.Getenv in production.
-// `cwd` is the working directory used as the default --allow-source-root in
-// safe mode when the user didn't pass one explicitly.
-func resolveMCPSafePolicy(f mcpSafeFlags, getenv func(string) string, cwd string) mcpSafePolicy {
+// As of v0.5.3 (#70) the default is **safe**: a bare `sl-dbg mcp` invocation
+// is treated as `--safe` with an auto-discovered `--allow-program` list and
+// cwd-rooted `--allow-source-root`. The operator opts *out* with
+// SL_DBG_INSECURE=1, not in.
+//
+// `getenv` and `lookpath` are injected for testability; pass os.Getenv and
+// exec.LookPath in production. `cwd` is the working directory used as the
+// default --allow-source-root in safe mode when the user didn't pass one.
+func resolveMCPSafePolicy(f mcpSafeFlags, getenv func(string) string, lookpath func(string) (string, error), cwd string) mcpSafePolicy {
 	pol := mcpSafePolicy{EnvUpdates: map[string]string{}}
 
 	insecure := false
@@ -79,21 +84,34 @@ func resolveMCPSafePolicy(f mcpSafeFlags, getenv func(string) string, cwd string
 		insecure = true
 	}
 
+	// Auto-safe: no explicit --safe and no insecure opt-out → behave as
+	// --safe. Issue #70: secure should be the default, not an opt-in.
+	autoSafe := false
 	if !f.Safe && !insecure {
-		pol.Refuse = errors.New(safeRefusalHelp)
-		return pol
+		f.Safe = true
+		autoSafe = true
 	}
 
 	if f.Safe {
-		// Programs must be explicitly allowlisted. The threat model treats
-		// `start --program /any/binary` as RCE, so silently defaulting it to
-		// some heuristic would defeat the point of safe mode.
+		// Programs must be on an allowlist. v0.5.2 and earlier refused
+		// when --allow-program was empty; v0.5.3+ first attempts to
+		// auto-discover known DAP-launchable interpreters on PATH so the
+		// safe-default invocation does not require boilerplate. Operators
+		// who want a tighter allowlist still pass --allow-program
+		// explicitly; the explicit list always wins. Issue #70.
 		if len(f.AllowProgram) == 0 {
-			pol.Refuse = errors.New(
-				"sl-dbg mcp --safe: --allow-program is required (e.g. --allow-program java --allow-program python3)\n" +
-					"This is the program allowlist passed to the daemon as SL_DBG_ALLOW_PROGRAM.\n" +
-					"It guards `debug_start` against arbitrary-binary launches by an MCP client.")
-			return pol
+			discovered := autoDiscoverPrograms(lookpath)
+			if len(discovered) == 0 {
+				pol.Refuse = errors.New(
+					"sl-dbg mcp: no DAP-launchable interpreter (java, python3, node, dlv) found on PATH for the auto-safe allowlist.\n" +
+						"Either install one of those, or pass --allow-program <path-or-glob> explicitly.\n" +
+						"To opt out of safe mode entirely, set SL_DBG_INSECURE=1 (NOT recommended for LLM clients).")
+				return pol
+			}
+			f.AllowProgram = discovered
+			pol.Warnings = append(pol.Warnings,
+				fmt.Sprintf("sl-dbg mcp --safe: --allow-program auto-discovered from PATH: %s. Pass --allow-program explicitly to narrow.",
+					strings.Join(discovered, ", ")))
 		}
 		pol.EnvUpdates["SL_DBG_ALLOW_PROGRAM"] = strings.Join(f.AllowProgram, ":")
 
@@ -147,6 +165,13 @@ func resolveMCPSafePolicy(f mcpSafeFlags, getenv func(string) string, cwd string
 		} else {
 			pol.EnvUpdates["SL_DBG_ALLOW_EVAL"] = "0"
 		}
+		if autoSafe {
+			// Surface the implicit flip so an operator who expected legacy
+			// behavior is not silently quieter than they should be.
+			pol.Warnings = append([]string{
+				"sl-dbg mcp: --safe is now the default (issue #70). Pass SL_DBG_INSECURE=1 to opt out (NOT recommended).",
+			}, pol.Warnings...)
+		}
 		return pol
 	}
 
@@ -161,9 +186,42 @@ func resolveMCPSafePolicy(f mcpSafeFlags, getenv func(string) string, cwd string
 		"  * session cap : NONE",
 		"  * audit log   : DISABLED",
 		"This mode is intended for local CLI / single-developer use only.",
-		"For LLM-driven clients, re-run with `--safe` instead.",
+		"For LLM-driven clients, re-run without SL_DBG_INSECURE (safe is the default).",
 		"================================================================")
 	return pol
+}
+
+// autoDiscoverPrograms returns the set of canonical absolute paths for the
+// DAP-launchable interpreters sl-dbg supports out of the box, restricted to
+// what is actually on PATH. Used by the auto-safe default so a bare
+// `sl-dbg mcp` invocation does not require boilerplate. Issue #70.
+//
+// We deliberately keep this list short and well-known; an operator who wants
+// to permit a custom interpreter (e.g. a private JDK or a venv'd python) must
+// pass --allow-program explicitly so they consciously expand the trust
+// boundary.
+func autoDiscoverPrograms(lookpath func(string) (string, error)) []string {
+	const candidatesCSV = "java,python3,python,node,dlv"
+	var found []string
+	seen := map[string]bool{}
+	for _, name := range strings.Split(candidatesCSV, ",") {
+		path, err := lookpath(name)
+		if err != nil || path == "" {
+			continue
+		}
+		// Resolve symlinks so two PATH entries pointing at the same binary
+		// (e.g. python3 → python3.12) do not double-allow the same target.
+		if resolved, rerr := filepath.EvalSymlinks(path); rerr == nil && resolved != "" {
+			path = resolved
+		}
+		path = filepath.Clean(path)
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		found = append(found, path)
+	}
+	return found
 }
 
 // applyMCPSafePolicy writes warnings to `w` and exports any env updates so

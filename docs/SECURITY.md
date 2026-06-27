@@ -180,11 +180,15 @@ These are known residual risks or correctness gaps. Some mitigations may land in
 
 ## Hardening Recipe
 
-`sl-dbg mcp` refuses to start with permissive defaults (issue [#53](https://github.com/y0geshpatil/sl-dbg/issues/53)). Choose one of these two modes:
+`sl-dbg mcp` is **secure-by-default** as of v0.5.3 (issue [#70](https://github.com/y0geshpatil/sl-dbg/issues/70)). A bare invocation is treated as `--safe`, with the program allowlist auto-discovered from PATH (java, python3, node, dlv) and the source jail rooted at the cwd. The original behaviour (refuse-without-flags) shipped in [#53](https://github.com/y0geshpatil/sl-dbg/issues/53). The two modes are:
 
-### Recommended: `--safe`
+### Recommended (default): `--safe`
 
 ```bash
+# Auto-discovered allowlist; just works for most projects.
+sl-dbg mcp
+
+# Or pin the allowlist explicitly:
 sl-dbg mcp --safe \
   --allow-program java \
   --allow-program python3 \
@@ -197,7 +201,7 @@ sl-dbg mcp --safe \
 
 | Flag | Daemon env var | Default under `--safe` |
 |---|---|---|
-| `--allow-program` (required) | `SL_DBG_ALLOW_PROGRAM` | none — must be passed |
+| `--allow-program` | `SL_DBG_ALLOW_PROGRAM` | auto-discovered from PATH (java, python3, node, dlv) |
 | `--allow-source-root` | `SL_DBG_ALLOW_SOURCE_ROOT` | current working directory |
 | `--max-sessions` | `SL_DBG_MAX_SESSIONS` | `8` |
 | `--audit-log` | `SL_DBG_AUDIT_LOG` | `$XDG_STATE_HOME/sl-dbg/audit.log` |
