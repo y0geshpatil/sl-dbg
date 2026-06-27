@@ -54,7 +54,12 @@ resolve_version() {
   local effective
   effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}\n' \
     "https://github.com/${REPO}/releases/latest")"
-  echo "${effective##*/tag/}"
+  # When the repo has no releases yet, GitHub does not redirect to
+  # /tag/<v>; the URL just lands back on /releases. Detect that.
+  case "$effective" in
+    *"/tag/"*) echo "${effective##*/tag/}" ;;
+    *)         echo "" ;;
+  esac
 }
 
 VERSION="$(resolve_version)"
