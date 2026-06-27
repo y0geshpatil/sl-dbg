@@ -424,6 +424,8 @@ var toolRegistry = []Tool{
 			"mainClass":   stringProp("Java main class (when lang=java)"),
 			"classpath":   stringProp("Java classpath (when lang=java)"),
 			"sourceRoots": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "source roots for path resolution"},
+			"name":        stringProp("optional human-friendly id for the new session (must be unique within the daemon); auto-generated if omitted"),
+			"session":     stringProp("backward-compat alias for `name` when creating a session; not a target selector on debug_start (unlike other tools where `session` picks an existing session)"),
 		}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, rest, err := extractSession(raw)
@@ -454,6 +456,8 @@ var toolRegistry = []Tool{
 			"port":        intProp("DAP/JDWP port"),
 			"pid":         intProp("alternative to host:port (where supported)"),
 			"sourceRoots": map[string]interface{}{"type": "array", "items": map[string]interface{}{"type": "string"}, "description": "source roots"},
+			"name":        stringProp("optional human-friendly id for the new session (must be unique within the daemon); auto-generated if omitted"),
+			"session":     stringProp("backward-compat alias for `name` when creating a session; not a target selector on debug_attach (unlike other tools where `session` picks an existing session)"),
 		}),
 		Translate: func(raw json.RawMessage) (string, string, interface{}, error) {
 			sess, rest, err := extractSession(raw)
