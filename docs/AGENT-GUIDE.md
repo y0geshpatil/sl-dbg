@@ -41,7 +41,8 @@ If you're wiring sl-dbg into an LLM via function calling, expose these tools:
       "lang": {"type":"string","enum":["python","java","go","node","cpp","dotnet","rust"]},
       "program": {"type":"string"},
       "args": {"type":"array","items":{"type":"string"}},
-      "stop_on_entry": {"type":"boolean"}
+      "stop_on_entry": {"type":"boolean"},
+      "name": {"type":"string","description":"optional human-friendly id for the new session (must be unique within the daemon); auto-generated if omitted"}
     },
     "required": ["lang","program"]
   }
