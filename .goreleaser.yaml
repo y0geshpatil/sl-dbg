@@ -44,6 +44,15 @@ archives:
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
 
+# Publish release artifacts to the PUBLIC y0geshpatil/sl-dbg-releases repo
+# so end users can install without authenticating to the private source
+# repo. The release workflow needs a PAT with `contents: write` on the
+# releases repo, exported as GH_RELEASE_TOKEN (see .github/workflows/release.yml).
+release:
+  github:
+    owner: y0geshpatil
+    name: sl-dbg-releases
+
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
 

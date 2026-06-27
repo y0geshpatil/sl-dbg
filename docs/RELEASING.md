@@ -1,14 +1,34 @@
 # Releasing sl-dbg
 
-## Prerequisites (one-time setup before the first public release)
+## Distribution model
 
-1. **Make the repo public** at https://github.com/y0geshpatil/sl-dbg/settings.
-   `go install` and the curl installer both require this.
-2. **Create the Homebrew tap repo** `y0geshpatil/homebrew-sl-dbg` (an empty
-   public repo is enough; GoReleaser pushes the formula automatically).
-3. **Add repo secrets** under Settings → Secrets and variables → Actions:
-   - `HOMEBREW_TAP_GITHUB_TOKEN` — a PAT with `repo` scope on the tap repo.
-   - `GITHUB_TOKEN` is provided by Actions automatically.
+Source code lives in the **private** `y0geshpatil/sl-dbg` repo. Release
+binaries are published to the **public** mirror
+`y0geshpatil/sl-dbg-releases` so end users can install without holding
+any GitHub credentials. Docs/landing page live in
+`y0geshpatil/sl-dbg-site` (public, served via GitHub Pages).
+
+```
+sl-dbg (private)              sl-dbg-releases (public)         sl-dbg-site (public)
+  ├─ source code         ─►     └─ release tarballs        ◄──   └─ install.sh + index.html
+  └─ Actions: release.yml         (no source, no commits)         (GitHub Pages)
+```
+
+## Prerequisites (one-time setup before the first release)
+
+1. **Create the public release mirror** `y0geshpatil/sl-dbg-releases`
+   (empty public repo is enough — goreleaser pushes tags + assets).
+2. **Create the public docs site** `y0geshpatil/sl-dbg-site` and enable
+   GitHub Pages on the `main` branch (Settings → Pages → Source: `main` `/`).
+3. **Create the public Homebrew tap** `y0geshpatil/homebrew-sl-dbg`
+   (only needed if you want `brew install` support — optional).
+4. **Add repo secrets** under the *private* source repo's Settings →
+   Secrets and variables → Actions:
+   - `GH_RELEASE_TOKEN` — a fine-grained PAT with **Contents: read & write**
+     on `y0geshpatil/sl-dbg-releases`. GoReleaser uses this to push the
+     release to the public mirror.
+   - `HOMEBREW_TAP_GITHUB_TOKEN` — PAT with `repo` scope on the tap repo
+     (only if shipping a brew formula).
 
 ## Cutting a release
 

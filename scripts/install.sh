@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# sl-dbg installer — fetches the latest tagged GitHub release binary for
-# the current OS/arch and drops it into a directory on $PATH.
+# sl-dbg installer — fetches the latest tagged release binary for the
+# current OS/arch from the PUBLIC release-mirror repo and drops it on
+# $PATH. No authentication needed even though the source repo is private,
+# because release artifacts live in y0geshpatil/sl-dbg-releases.
 #
-# Usage (after the repo is public):
-#   curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
+# Usage:
+#   curl -fsSL https://sl-dbg.dev/install.sh | bash
 #
-# Or pin a version:
-#   curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh \
-#     | bash -s -- v0.3.0
+# Pin a version:
+#   curl -fsSL https://sl-dbg.dev/install.sh | bash -s -- v0.3.0
 #
-# Override install dir:
-#   INSTALL_DIR=$HOME/.local/bin curl ... | bash
+# Override install dir (no sudo needed if you own the dir):
+#   INSTALL_DIR=$HOME/.local/bin curl -fsSL https://sl-dbg.dev/install.sh | bash
 #
 # Why a script and not just `go install`? Most users don't have a Go
 # toolchain. This pulls the prebuilt tarball produced by goreleaser so the
 # install completes in seconds with no compiler dependency.
 set -euo pipefail
 
-REPO="y0geshpatil/sl-dbg"
+REPO="y0geshpatil/sl-dbg-releases"   # public mirror; source repo is private
 BINARY="sl-dbg"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 VERSION="${1:-latest}"
 
 die() { echo "error: $*" >&2; exit 1; }
 
-# Normalize OS/arch to the names goreleaser uses in the archive filename.
 detect_os() {
   case "$(uname -s)" in
     Darwin) echo darwin ;;
@@ -43,29 +43,24 @@ detect_arch() {
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
 
-# Resolve "latest" to a concrete tag via the GitHub API so we can build
-# a deterministic download URL. Falls back to the redirect target of
-# /releases/latest when jq isn't available.
+# Resolve "latest" to a concrete tag. We avoid the GitHub API to dodge
+# the 60-req/hr unauthenticated rate limit; the /releases/latest URL
+# redirects to /tag/<version> which we can parse with `curl -I`.
 resolve_version() {
   if [ "$VERSION" != "latest" ]; then
     echo "$VERSION"
     return
   fi
-  if command -v jq >/dev/null 2>&1; then
-    curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-      | jq -r .tag_name
-  else
-    # Follow the redirect; the final URL ends in /tag/<version>.
-    curl -fsSLI -o /dev/null -w '%{url_effective}\n' \
-      "https://github.com/${REPO}/releases/latest" | sed 's|.*/tag/||'
-  fi
+  local effective
+  effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}\n' \
+    "https://github.com/${REPO}/releases/latest")"
+  echo "${effective##*/tag/}"
 }
 
 VERSION="$(resolve_version)"
-[ -n "$VERSION" ] || die "could not resolve latest version"
+[ -n "$VERSION" ] || die "could not resolve latest version (no releases published yet?)"
 
-# goreleaser archive naming: sl-dbg_<version>_<os>_<arch>.tar.gz
-# The leading 'v' is stripped from the version in the filename.
+# goreleaser archive: sl-dbg_<version-no-v>_<os>_<arch>.tar.gz
 VER_NO_V="${VERSION#v}"
 ARCHIVE="${BINARY}_${VER_NO_V}_${OS}_${ARCH}.tar.gz"
 URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
@@ -77,11 +72,9 @@ tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL "$URL" -o "${tmp}/${ARCHIVE}" \
-  || die "download failed — check the tag exists and the repo is public"
+  || die "download failed — check that ${VERSION} exists at https://github.com/${REPO}/releases"
 tar -xzf "${tmp}/${ARCHIVE}" -C "$tmp"
 
-# Install: try the requested dir without sudo first; fall back to sudo
-# only if the user can't write it directly.
 if [ -w "$INSTALL_DIR" ]; then
   install -m 0755 "${tmp}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
 elif command -v sudo >/dev/null 2>&1; then
