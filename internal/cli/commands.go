@@ -679,6 +679,14 @@ func newSourceCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "source",
 		Short: "Show source code (defaults to current pause location)",
+		Long: `Show source code (defaults to current pause location).
+
+Security: the daemon only returns files that resolve under the session's
+source-root allowlist — explicit --source-root values, the launch cwd, the
+program directory, files containing registered breakpoints, and the current
+pause location. When SL_DBG_ALLOW_SOURCE_ROOT is set, paths under any of
+those directories are also accepted. Paths containing '..' segments are
+rejected unconditionally. Anything else returns SOURCE_PATH_DENIED.`,
 		Example: `  sl-dbg source                 # source at current line, all lines
   sl-dbg source --around 5      # 5 lines on each side of current
   sl-dbg source --file Buggy.java --line 24 --around 3`,
