@@ -71,6 +71,36 @@ trap 'rm -rf "$tmp"' EXIT
 
 curl -fsSL "$URL" -o "${tmp}/${ARCHIVE}" \
   || die "download failed — check that ${VERSION} exists at https://github.com/${REPO}/releases"
+
+# Verify the SHA-256 checksum against the release-published manifest.
+# goreleaser publishes <archive-base>_checksums.txt for every release; we
+# refuse to install if the file is missing or the hash doesn't match.
+# Issue #68.
+CHECKSUMS="${BINARY}_${VER_NO_V}_checksums.txt"
+CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/${CHECKSUMS}"
+echo "==> verifying SHA-256 against ${CHECKSUMS_URL}"
+if [ "${INSTALL_SKIP_VERIFY:-0}" = "1" ]; then
+  echo "==> WARNING: INSTALL_SKIP_VERIFY=1 set; skipping checksum verification"
+elif curl -fsSL "$CHECKSUMS_URL" -o "${tmp}/${CHECKSUMS}"; then
+  expected="$(awk -v a="${ARCHIVE}" '$2==a{print $1}' "${tmp}/${CHECKSUMS}")"
+  if [ -z "$expected" ]; then
+    die "checksum for ${ARCHIVE} not present in ${CHECKSUMS}; refusing to install"
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "${tmp}/${ARCHIVE}" | awk '{print $1}')"
+  elif command -v shasum >/dev/null 2>&1; then
+    actual="$(shasum -a 256 "${tmp}/${ARCHIVE}" | awk '{print $1}')"
+  else
+    die "neither sha256sum nor shasum available — cannot verify download"
+  fi
+  if [ "$expected" != "$actual" ]; then
+    die "SHA-256 mismatch for ${ARCHIVE}: expected ${expected}, got ${actual}"
+  fi
+  echo "==> SHA-256 OK"
+else
+  die "could not fetch ${CHECKSUMS_URL}; refusing to install unverified binary (set INSTALL_SKIP_VERIFY=1 to override, NOT recommended)"
+fi
+
 tar -xzf "${tmp}/${ARCHIVE}" -C "$tmp"
 
 if [ -w "$INSTALL_DIR" ]; then
