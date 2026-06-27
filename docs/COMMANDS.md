@@ -242,7 +242,9 @@ Persistent watch expressions, evaluated and returned with every pause.
 Details about the current exception (only valid when paused on exception).
 
 ### `sl-dbg source [--frame N] [--around L]`
-Source code around current line.
+Source code around current line. May also be invoked with `--file <path>` and `--line <n>` to view a specific location.
+
+**Security:** the daemon only returns files that resolve under the session's source-root allowlist — explicit `--source-root` values, the launch cwd, the program directory, files containing registered breakpoints, and the current pause location. When `SL_DBG_ALLOW_SOURCE_ROOT` is set, paths under those directories are also accepted. Paths containing `..` segments are rejected unconditionally. Anything else returns `SOURCE_PATH_DENIED`. This prevents `source --file` from being used as an arbitrary-file-read primitive against the daemon user, even in `--read-only` sessions. Issue #57.
 
 ### `sl-dbg modules`
 Loaded modules / shared libraries / JARs.
@@ -346,7 +348,7 @@ Or on error:
 | `PAUSE_TIMEOUT` | Adapter accepted pause but did not stop within 10s | Set a line BP and continue instead |
 | `TIMEOUT` | Operation exceeded its `--timeout` | Raise `--timeout` |
 | `PROGRAM_NOT_ALLOWED` | `debug_start`: program path not in `SL_DBG_ALLOW_PROGRAM` allowlist | Add program to allowlist or unset env var |
-| `SOURCE_PATH_DENIED` | `debug_source`: file outside `SL_DBG_ALLOW_SOURCE_ROOT` and not under the session's own roots | Add parent dir to allowlist or include in `sourceRoots` |
+| `SOURCE_PATH_DENIED` | `debug_source`: file not under the session's source roots (program dir, `--source-root`, registered breakpoint files, current pause location), and not under `SL_DBG_ALLOW_SOURCE_ROOT` either — or path contained a `..` segment | Pass an absolute path under the session's roots, set a breakpoint in the file first, add `--source-root`, or set `SL_DBG_ALLOW_SOURCE_ROOT` |
 | `EVAL_DENIED` | `debug_eval`: expression matched `SL_DBG_DENY_EVAL_PATTERNS` | Rephrase, or set `SL_DBG_DENY_EVAL_PATTERNS=-` |
 | `RESOURCE_EXHAUSTED` | `debug_start`/`debug_attach`: daemon at `SL_DBG_MAX_SESSIONS` cap | Stop another session or raise the cap |
 
@@ -357,7 +359,7 @@ The daemon reads these at startup. All are optional; defaults preserve legacy be
 | Env var | Purpose | Issue |
 |---|---|---|
 | `SL_DBG_ALLOW_PROGRAM` | Colon-separated glob allowlist for `start --program` paths. Globs match either the full path or basename. | #21 |
-| `SL_DBG_ALLOW_SOURCE_ROOT` | Colon-separated absolute-path roots that `debug_source` may read. The session's own `sourceRoots`/`cwd`/program dir are always trusted. | #18 |
+| `SL_DBG_ALLOW_SOURCE_ROOT` | Colon-separated absolute-path roots that `debug_source` may read **in addition** to the session's own trusted roots. The session's `sourceRoots`/`cwd`/program dir, registered breakpoint files, and current pause location are always trusted; everything else is denied with `SOURCE_PATH_DENIED`. Paths with `..` segments are rejected unconditionally. | #18, #57 |
 | `SL_DBG_MAX_SESSIONS` | Cap on concurrent sessions in the daemon. `0` (default) = unlimited. | #22 |
 | `SL_DBG_AUDIT_LOG` | Path. When set, every `start`/`attach`/`eval`/`set` is appended as one NDJSON line (`ts`, `event`, `session`, `args`). | #23 |
 | `SL_DBG_DENY_EVAL_PATTERNS` | Colon-separated substring deny list for `debug_eval` expressions. Default hardcoded list blocks the obvious Java side-effect classes (`FileOutputStream`, `Runtime.getRuntime`, …). Set to `-` to disable. | #19 |
