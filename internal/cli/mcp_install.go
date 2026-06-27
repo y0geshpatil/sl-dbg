@@ -92,6 +92,139 @@ without touching anything.`,
 	return c
 }
 
+// newMCPUninstallCmd removes the sl-dbg entry from an agent's MCP config.
+// It is the exact inverse of newMCPInstallCmd: it touches only the named
+// server id, leaves every other key intact, and writes a .bak backup
+// before mutating anything.
+func newMCPUninstallCmd() *cobra.Command {
+	var (
+		dryRun   bool
+		serverID string
+	)
+	c := &cobra.Command{
+		Use:   "uninstall [agent]",
+		Short: "Remove sl-dbg from an MCP-aware agent's config (claude|cursor|vscode|codex|copilot|all)",
+		Long: `Remove the sl-dbg server entry from the chosen agent's MCP config.
+
+Only the entry with the matching server id (default "sl-dbg") is removed;
+every other key in the config file is preserved. A timestamped .bak of
+the prior file is written before any change.
+
+Pass --dry-run to preview what would change without touching disk.`,
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return errors.New("agent name required: claude|cursor|vscode|codex|copilot|all")
+			}
+			targets, err := resolveAgents(strings.ToLower(args[0]))
+			if err != nil {
+				return err
+			}
+			var anyOK bool
+			for _, t := range targets {
+				if err := uninstallFromAgent(t, serverID, dryRun); err != nil {
+					fmt.Fprintf(os.Stderr, "✗ %s: %v\n", t.name, err)
+					continue
+				}
+				anyOK = true
+			}
+			if !anyOK {
+				return errors.New("no agents updated")
+			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&dryRun, "dry-run", false, "show what would change but do not write")
+	c.Flags().StringVar(&serverID, "id", "sl-dbg", "MCP server id to remove")
+	return c
+}
+
+func uninstallFromAgent(t agentTarget, serverID string, dryRun bool) error {
+	switch t.kind {
+	case "json":
+		return uninstallJSON(t, serverID, dryRun)
+	case "toml":
+		return uninstallTOML(t, serverID, dryRun)
+	default:
+		return fmt.Errorf("unsupported config kind %q", t.kind)
+	}
+}
+
+func uninstallJSON(t agentTarget, serverID string, dryRun bool) error {
+	data, err := os.ReadFile(t.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("• %s: %s does not exist, nothing to do\n", t.name, t.path)
+			return nil
+		}
+		return err
+	}
+	doc := map[string]interface{}{}
+	if err := json.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("existing config is not valid JSON: %w", err)
+	}
+	servers, _ := doc["mcpServers"].(map[string]interface{})
+	if servers == nil {
+		fmt.Printf("• %s: no mcpServers block in %s, nothing to do\n", t.name, t.path)
+		return nil
+	}
+	if _, ok := servers[serverID]; !ok {
+		fmt.Printf("• %s: %q not present in %s, nothing to do\n", t.name, serverID, t.path)
+		return nil
+	}
+	delete(servers, serverID)
+	if len(servers) == 0 {
+		delete(doc, "mcpServers")
+	} else {
+		doc["mcpServers"] = servers
+	}
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	out = append(out, '\n')
+
+	if dryRun {
+		fmt.Printf("# would write %s\n%s\n", t.path, string(out))
+		return nil
+	}
+	if err := atomicWrite(t.path, out, false); err != nil {
+		return err
+	}
+	fmt.Printf("✓ %s: removed %q from %s\n", t.name, serverID, t.path)
+	return nil
+}
+
+func uninstallTOML(t agentTarget, serverID string, dryRun bool) error {
+	data, err := os.ReadFile(t.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Printf("• %s: %s does not exist, nothing to do\n", t.name, t.path)
+			return nil
+		}
+		return err
+	}
+	header := fmt.Sprintf("[mcp_servers.%s]", serverID)
+	if !strings.Contains(string(data), header) {
+		fmt.Printf("• %s: %q not present in %s, nothing to do\n", t.name, serverID, t.path)
+		return nil
+	}
+	out := removeTOMLStanza(string(data), header)
+	// Collapse 3+ consecutive blank lines that may result from the removal.
+	for strings.Contains(out, "\n\n\n") {
+		out = strings.ReplaceAll(out, "\n\n\n", "\n\n")
+	}
+	if dryRun {
+		fmt.Printf("# would write %s\n%s\n", t.path, out)
+		return nil
+	}
+	if err := atomicWrite(t.path, []byte(out), false); err != nil {
+		return err
+	}
+	fmt.Printf("✓ %s: removed %q from %s\n", t.name, serverID, t.path)
+	return nil
+}
+
 // ---------------------------------------------------------------------------
 // agents
 // ---------------------------------------------------------------------------

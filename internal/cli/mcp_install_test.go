@@ -180,3 +180,103 @@ func TestDryRun_DoesNotWrite(t *testing.T) {
 		t.Fatalf("dry-run wrote a file: %v", err)
 	}
 }
+
+func TestUninstallJSON_RemovesOnlyOurEntry(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	pre := `{"mcpServers":{"sl-dbg":{"command":"x","args":["mcp"]},"other":{"command":"y"}},"window":{"width":900}}`
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	servers := doc["mcpServers"].(map[string]any)
+	if _, ok := servers["sl-dbg"]; ok {
+		t.Errorf("sl-dbg entry not removed: %s", data)
+	}
+	if _, ok := servers["other"]; !ok {
+		t.Errorf("sibling entry removed: %s", data)
+	}
+	if doc["window"] == nil {
+		t.Errorf("unrelated top-level key lost: %s", data)
+	}
+}
+
+func TestUninstallJSON_DropsEmptyMcpServersBlock(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(path, []byte(`{"mcpServers":{"sl-dbg":{"command":"x"}},"theme":"dark"}`), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	var doc map[string]any
+	_ = json.Unmarshal(data, &doc)
+	if _, ok := doc["mcpServers"]; ok {
+		t.Errorf("empty mcpServers block kept: %s", data)
+	}
+	if doc["theme"] != "dark" {
+		t.Errorf("unrelated key lost: %s", data)
+	}
+}
+
+func TestUninstallJSON_NoFile(t *testing.T) {
+	target := agentTarget{name: "x", kind: "json", path: filepath.Join(t.TempDir(), "missing.json"), create: true}
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatalf("missing file should be a no-op, got %v", err)
+	}
+}
+
+func TestUninstallJSON_NotPresent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	_ = os.WriteFile(path, []byte(`{"mcpServers":{"other":{"command":"y"}}}`), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	pre, _ := os.ReadFile(path)
+	if err := uninstallJSON(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	post, _ := os.ReadFile(path)
+	if string(pre) != string(post) {
+		t.Errorf("file changed when entry was absent:\nbefore: %s\nafter:  %s", pre, post)
+	}
+}
+
+func TestUninstallTOML_RemovesStanza(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	pre := "[model]\nname = \"x\"\n\n[mcp_servers.sl-dbg]\ncommand = \"/bin/sl-dbg\"\nargs = [\"mcp\"]\n\n[other]\nz = 1\n"
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "codex", kind: "toml", path: path, create: true}
+	if err := uninstallTOML(target, "sl-dbg", false); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := os.ReadFile(path)
+	s := string(out)
+	if strings.Contains(s, "mcp_servers.sl-dbg") {
+		t.Errorf("stanza not removed:\n%s", s)
+	}
+	if !strings.Contains(s, "[model]") || !strings.Contains(s, "[other]") {
+		t.Errorf("siblings removed:\n%s", s)
+	}
+}
+
+func TestUninstall_DryRunDoesNotWrite(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	pre := `{"mcpServers":{"sl-dbg":{"command":"x"}}}`
+	_ = os.WriteFile(path, []byte(pre), 0o600)
+	target := agentTarget{name: "x", kind: "json", path: path, create: true}
+	if err := uninstallJSON(target, "sl-dbg", true); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(path)
+	if string(data) != pre {
+		t.Errorf("dry-run mutated file:\n%s", data)
+	}
+}

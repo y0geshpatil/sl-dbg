@@ -108,4 +108,7 @@ Next steps:
        sl-dbg start --lang python --program <your-script.py> --stop-on-entry
 
   Docs: https://y0geshpatil.github.io/sl-dbg-site/
+
+To uninstall later:
+  curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
 EOF

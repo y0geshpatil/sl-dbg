@@ -782,6 +782,7 @@ any of the listed case-insensitive substrings outright.`,
 	c.Flags().StringSliceVar(&allowCwd, "allow-cwd", nil, "restrict start/attach to programs under these dirs (repeatable)")
 	c.Flags().StringSliceVar(&denyProgram, "deny-program", nil, "block start/attach when program contains any of these substrings (repeatable)")
 	c.AddCommand(newMCPInstallCmd())
+	c.AddCommand(newMCPUninstallCmd())
 	return c
 }
 

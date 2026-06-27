@@ -130,6 +130,16 @@ sl-dbg mcp
 backup. It refuses to overwrite an existing entry unless `--force` is passed,
 and `--dry-run` shows the diff without touching disk.
 
+### Uninstall
+```bash
+# Remove the binary AND the sl-dbg entry from every detected agent's MCP config
+curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
+
+# Or surgically, just one agent
+sl-dbg mcp uninstall claude       # also: cursor | vscode | codex | copilot | all
+sl-dbg mcp uninstall all --dry-run
+```
+
 
 ## Platform Support
 
