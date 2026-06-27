@@ -754,6 +754,12 @@ func newMCPCmd() *cobra.Command {
 	var readOnly bool
 	var allowCwd []string
 	var denyProgram []string
+	var safe bool
+	var allowProgram []string
+	var allowSourceRoot []string
+	var maxSessions int
+	var auditLog string
+	var allowEval bool
 	c := &cobra.Command{
 		Use:   "mcp",
 		Short: "Run as an MCP server over stdio",
@@ -761,15 +767,49 @@ func newMCPCmd() *cobra.Command {
 sl-dbg command as an MCP tool. Designed to be wired into Claude Desktop,
 Cursor, Continue, or any MCP-aware client.
 
-Use --read-only to hide tools that can change debugger or program state
-(start, attach, break, continue/step, eval, watch add/remove, etc.). The
-remaining inspection-only tools are safe to expose to an untrusted agent.
+SECURITY: this transport refuses to start unless you pass --safe or set
+SL_DBG_INSECURE=1. The MCP caller is a model acting on possibly
+prompt-injected input, and the primitives exposed here (eval, source,
+start --program) are RCE-grade. Default-deny is mandatory.
+
+Use --safe to enable secure defaults in a single flag. It maps to:
+  SL_DBG_ALLOW_PROGRAM     = --allow-program (required)
+  SL_DBG_ALLOW_SOURCE_ROOT = --allow-source-root, defaults to cwd
+  SL_DBG_MAX_SESSIONS      = --max-sessions, default 8
+  SL_DBG_AUDIT_LOG         = --audit-log, default $XDG_STATE_HOME/sl-dbg/audit.log
+  SL_DBG_ALLOW_EVAL        = 0 (use --allow-eval to opt back in)
+
+These env vars are exported into the auto-spawned daemon. If a daemon is
+already running with different settings, restart it first:
+  sl-dbg daemon stop
+
+Use --read-only to additionally hide tools that can change debugger or
+program state (start, attach, break, continue/step, eval, watch
+add/remove, etc.). The remaining inspection-only tools are safe to expose
+to an untrusted agent.
 
 Use --allow-cwd <dir> (repeatable) to restrict debug_start/debug_attach
 to programs whose cwd or program path is under one of the listed roots.
 Use --deny-program <substr> (repeatable) to block program paths matching
 any of the listed case-insensitive substrings outright.`,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			cwd, _ := os.Getwd()
+			pol := resolveMCPSafePolicy(mcpSafeFlags{
+				Safe:            safe,
+				AllowProgram:    allowProgram,
+				AllowSourceRoot: allowSourceRoot,
+				MaxSessions:     maxSessions,
+				AuditLog:        auditLog,
+				AllowEval:       allowEval,
+			}, os.Getenv, cwd)
+			if err := applyMCPSafePolicy(pol, os.Stderr); err != nil {
+				fmt.Fprintln(os.Stderr, err.Error())
+				// Use a SilenceUsage-style return so cobra doesn't print
+				// the giant usage block on top of our helpful refusal.
+				cmd.SilenceUsage = true
+				cmd.SilenceErrors = true
+				return err
+			}
 			srv := mcp.NewServerWithOptions(os.Stdin, os.Stdout, mcpDaemonCaller{}, mcp.Options{
 				ReadOnly:    readOnly,
 				AllowCwd:    allowCwd,
@@ -778,6 +818,12 @@ any of the listed case-insensitive substrings outright.`,
 			return srv.Run(context.Background())
 		},
 	}
+	c.Flags().BoolVar(&safe, "safe", false, "secure-by-default mode: requires --allow-program, jails source reads, disables eval, caps sessions, opens audit log")
+	c.Flags().StringSliceVar(&allowProgram, "allow-program", nil, "program-name glob allowed for debug_start (repeatable; exported as SL_DBG_ALLOW_PROGRAM)")
+	c.Flags().StringSliceVar(&allowSourceRoot, "allow-source-root", nil, "absolute dir under which source reads are permitted (repeatable; exported as SL_DBG_ALLOW_SOURCE_ROOT)")
+	c.Flags().IntVar(&maxSessions, "max-sessions", 0, "concurrent-session cap (safe mode default: 8; exported as SL_DBG_MAX_SESSIONS)")
+	c.Flags().StringVar(&auditLog, "audit-log", "", "NDJSON audit log path (safe mode default: $XDG_STATE_HOME/sl-dbg/audit.log; exported as SL_DBG_AUDIT_LOG)")
+	c.Flags().BoolVar(&allowEval, "allow-eval", false, "re-enable `eval` under --safe (default off; setting this re-introduces RCE risk)")
 	c.Flags().BoolVar(&readOnly, "read-only", false, "expose only inspection tools; hide mutating ones")
 	c.Flags().StringSliceVar(&allowCwd, "allow-cwd", nil, "restrict start/attach to programs under these dirs (repeatable)")
 	c.Flags().StringSliceVar(&denyProgram, "deny-program", nil, "block start/attach when program contains any of these substrings (repeatable)")

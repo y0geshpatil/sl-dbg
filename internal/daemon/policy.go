@@ -23,6 +23,11 @@
 //                                (FileOutputStream, ProcessBuilder, …) when
 //                                the daemon sees a read-only session — issue
 //                                #19. Set to "-" to disable.
+//   SL_DBG_ALLOW_EVAL          — "0"/"false"/"no" disables `eval` entirely
+//                                (handleEval returns EVAL_DENIED). Default
+//                                "1". Set by `sl-dbg mcp --safe` to make the
+//                                eval RCE surface unreachable to LLM clients.
+//                                Issue #53.
 package daemon
 
 import (
@@ -45,6 +50,7 @@ type Policy struct {
 	MaxSessions      int      // 0 = unlimited
 	AuditLogPath     string   // "" = no audit
 	DenyEvalPatterns []string // substring matches against eval expression
+	EvalDisabled     bool     // when true, handleEval returns EVAL_DENIED unconditionally (issue #53)
 }
 
 // LoadPolicyFromEnv builds a Policy from the SL_DBG_* environment variables.
@@ -74,6 +80,14 @@ func LoadPolicyFromEnv() Policy {
 		p.DenyEvalPatterns = nil
 	default:
 		p.DenyEvalPatterns = splitColonList(raw)
+	}
+	if v := strings.TrimSpace(os.Getenv("SL_DBG_ALLOW_EVAL")); v != "" {
+		switch strings.ToLower(v) {
+		case "0", "false", "no", "off":
+			p.EvalDisabled = true
+		case "1", "true", "yes", "on":
+			p.EvalDisabled = false
+		}
 	}
 	return p
 }
@@ -150,6 +164,9 @@ func (p Policy) SourcePathAllowed(path string) error {
 // #19. The deny set is intentionally substring-based (cheap, no parser
 // dependency); false positives are acceptable for a security knob.
 func (p Policy) EvalAllowed(expr string) error {
+	if p.EvalDisabled {
+		return fmt.Errorf("eval is disabled by policy (SL_DBG_ALLOW_EVAL=0); restart daemon without it to re-enable")
+	}
 	for _, needle := range p.DenyEvalPatterns {
 		if strings.Contains(expr, needle) {
 			return fmt.Errorf("expression contains deny-listed token %q (set SL_DBG_DENY_EVAL_PATTERNS=- to disable)", needle)

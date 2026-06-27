@@ -116,9 +116,9 @@ func Run() error {
 	if srv.policy.MaxSessions > 0 {
 		srv.mgr.SetMaxSessions(srv.policy.MaxSessions)
 	}
-	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q deny_eval_patterns=%d",
+	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q deny_eval_patterns=%d eval_disabled=%v",
 		len(srv.policy.AllowProgram), len(srv.policy.AllowSourceRoot), srv.policy.MaxSessions,
-		srv.policy.AuditLogPath, len(srv.policy.DenyEvalPatterns))
+		srv.policy.AuditLogPath, len(srv.policy.DenyEvalPatterns), srv.policy.EvalDisabled)
 
 	// Refuse to start if another daemon is alive.
 	stalePid := 0

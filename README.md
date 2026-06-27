@@ -123,8 +123,9 @@ sl-dbg mcp install claude
 # Or print the JSON/TOML snippet to paste yourself
 sl-dbg mcp install --print
 
-# Under the hood, agents launch this — exposes every command as an MCP tool
-sl-dbg mcp
+# Under the hood, agents launch this — exposes every command as an MCP tool.
+# `mcp` refuses to start without --safe (or SL_DBG_INSECURE=1 for local CLI use).
+sl-dbg mcp --safe --allow-program java --allow-program python3
 ```
 `sl-dbg mcp install` does a safe read-merge-write with a timestamped `.bak`
 backup. It refuses to overwrite an existing entry unless `--force` is passed,
