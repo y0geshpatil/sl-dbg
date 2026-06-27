@@ -344,6 +344,7 @@ type PauseInfo struct {
 	Location *Loc   `json:"location,omitempty"`
 	HitBP    int    `json:"hitBreakpoint,omitempty"`
 	ExitCode *int   `json:"exitCode,omitempty"`
+	Signal   string `json:"signal,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
 

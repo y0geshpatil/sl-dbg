@@ -131,6 +131,23 @@ sl-dbg mcp --safe --allow-program java --allow-program python3
 backup. It refuses to overwrite an existing entry unless `--force` is passed,
 and `--dry-run` shows the diff without touching disk.
 
+The registered command runs `sl-dbg mcp --safe --allow-program *` by
+default — secure-by-default mode (source jail on, eval off, session cap on,
+audit log on). To restrict which binaries the agent may launch via
+`debug_start`, pass `--allow-program /path/to/your/program` (repeatable).
+Pass `--read-only` to register the server with every mutating tool hidden,
+or `--insecure` to fall back to the legacy permissive mode (not recommended).
+
+### Uninstall
+```bash
+# Remove the binary AND the sl-dbg entry from every detected agent's MCP config
+curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
+
+# Or surgically, just one agent
+sl-dbg mcp uninstall claude       # also: cursor | vscode | codex | copilot | all
+sl-dbg mcp uninstall all --dry-run
+```
+
 
 ## Platform Support
 

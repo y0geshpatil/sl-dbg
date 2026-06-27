@@ -80,3 +80,8 @@ setup: build
 java-adapter:
 	cd adapters/java-launcher && mvn -q -DskipTests package
 	@echo "✓ Built adapters/java-launcher/target/sl-dbg-java-adapter.jar"
+
+## docs-mcp: Regenerate ../sl-dbg-site/docs/mcp.md from a live binary
+docs-mcp: build
+	python3 scripts/gen-mcp-docs.py ./$(BUILD_DIR)/$(BINARY) > ../sl-dbg-site/docs/mcp.md
+	@echo "✓ Wrote ../sl-dbg-site/docs/mcp.md"

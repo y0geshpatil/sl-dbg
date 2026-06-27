@@ -81,6 +81,42 @@ func TestUnknownTool(t *testing.T) {
 	}
 }
 
+// Issue #57: the `name` property must be advertised in the inputSchema of
+// debug_start and debug_attach so schema-driven MCP clients can discover it.
+func TestDebugStartAttachAdvertiseNameProperty(t *testing.T) {
+	c := &fakeCaller{}
+	outs := runOnce(t, c,
+		`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`,
+		`{"jsonrpc":"2.0","id":2,"method":"tools/list"}`,
+	)
+	var resp struct {
+		Result struct {
+			Tools []struct {
+				Name        string                 `json:"name"`
+				InputSchema map[string]interface{} `json:"inputSchema"`
+			} `json:"tools"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(outs[1]), &resp); err != nil {
+		t.Fatalf("decode tools/list: %v", err)
+	}
+	for _, want := range []string{"debug_start", "debug_attach"} {
+		var props map[string]interface{}
+		for _, tool := range resp.Result.Tools {
+			if tool.Name == want {
+				props, _ = tool.InputSchema["properties"].(map[string]interface{})
+				break
+			}
+		}
+		if props == nil {
+			t.Fatalf("%s tool or its properties missing from tools/list", want)
+		}
+		if _, ok := props["name"]; !ok {
+			t.Errorf("%s.inputSchema.properties missing `name` (issue #57)", want)
+		}
+	}
+}
+
 func TestNotificationProducesNoResponse(t *testing.T) {
 	outs := runOnce(t, &fakeCaller{},
 		`{"jsonrpc":"2.0","method":"notifications/initialized"}`,

@@ -127,3 +127,62 @@ func TestManagerReserveCap(t *testing.T) {
 		t.Errorf("MaxSessions accessor wrong: %d", m.MaxSessions())
 	}
 }
+
+// TestLastTerminalAfterPause verifies that once a session has terminated,
+// LastTerminal() reflects the terminal reason/exitCode/signal — not the
+// stale last-pause reason. Regression test for issue #59 ("listen after
+// SIGKILL returns stale reason:entry").
+func TestLastTerminalAfterPause(t *testing.T) {
+	s := &Session{ID: "t", state: StatePaused, lastPauseReason: "entry"}
+	ec := 247
+	s.exitCode = &ec
+	s.state = StateExited
+	s.lastTerminal = &stopEvent{reason: "signal", exited: &ec, terminated: true, signal: "killed"}
+
+	reason, gotEC, sig, ok := s.LastTerminal()
+	if !ok {
+		t.Fatalf("LastTerminal ok=false")
+	}
+	if reason != "signal" {
+		t.Errorf("reason=%q want signal", reason)
+	}
+	if sig != "killed" {
+		t.Errorf("signal=%q want killed", sig)
+	}
+	if gotEC == nil || *gotEC != 247 {
+		t.Errorf("exitCode=%v want 247", gotEC)
+	}
+	// Mutating returned exit code must not change the cached value.
+	*gotEC = 0
+	if *s.exitCode != 247 {
+		t.Errorf("LastTerminal leaked internal exitCode pointer")
+	}
+
+	// LastPause still returns the (now stale) entry reason — that's
+	// expected; callers in terminal state must prefer LastTerminal.
+	if r, _, _ := s.LastPause(); r != "entry" {
+		t.Errorf("LastPause reason=%q want entry", r)
+	}
+}
+
+// TestInstallWaiterTerminalShortCircuit verifies a late waiter on an
+// already-terminated session receives the terminal stopEvent immediately
+// (carrying signal info), not a stale pause event.
+func TestInstallWaiterTerminalShortCircuit(t *testing.T) {
+	s := &Session{ID: "t", state: StateExited, lastPauseReason: "entry"}
+	ec := 137
+	s.lastTerminal = &stopEvent{reason: "signal", exited: &ec, terminated: true, signal: "killed"}
+
+	ch := s.installWaiter()
+	select {
+	case ev := <-ch:
+		if ev.reason != "signal" || ev.signal != "killed" {
+			t.Errorf("waiter got reason=%q signal=%q; want signal/killed", ev.reason, ev.signal)
+		}
+		if ev.exited == nil || *ev.exited != 137 {
+			t.Errorf("waiter exited=%v want 137", ev.exited)
+		}
+	default:
+		t.Fatalf("waiter did not fire immediately for terminated session")
+	}
+}
