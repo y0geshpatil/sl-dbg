@@ -26,7 +26,7 @@ A debugger is a **god-mode tool**: it can read all memory, modify any variable, 
 ### 3. `--read-only` Mode
 Forbids state-mutating operations:
 - `setVariable`, `setExpression`
-- `evaluate` with `context=repl` (configurable: block all eval, or block only `repl`)
+- `evaluate` — all eval is rejected with `READ_ONLY_MODE` (issue #56). The DAP `context: "watch"` hint is purely advisory; expression-form eval in every supported language permits arbitrary side effects (process spawn, file I/O, network).
 - `goto` (changes flow)
 - Memory writes
 - Any logpoint that contains shell-injectable syntax

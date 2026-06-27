@@ -1015,6 +1015,16 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if err != nil {
 		return s.sessionNotFound(req.Sess, err.Error())
 	}
+	// Issue #56 (security): expression-form eval in every supported language
+	// permits arbitrary side effects (Python `__import__('os').system(...)`,
+	// Java static-method calls, Go DAP `call` semantics). The DAP
+	// `context: "watch"` hint is purely advisory and does not sandbox the
+	// adapter. Refuse all eval against a read-only session — match the MCP
+	// transport, which hides `debug_eval` under --read-only.
+	if rerr := refuseIfReadOnly(sess); rerr != nil {
+		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": "read_only"})
+		return *rerr
+	}
 	// Policy: eval deny-list (#19). Substring-match defeats the obvious
 	// Java side-effect classes that bypass the `context: "watch"` hint.
 	if err := s.policy.EvalAllowed(args.Expression); err != nil {
@@ -1022,17 +1032,11 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 		return errResp("EVAL_DENIED", err.Error(),
 			"the daemon blocks this expression via SL_DBG_DENY_EVAL_PATTERNS. Set the env var to '-' to disable, or remove the deny-listed token.")
 	}
-	if sess.ReadOnly {
-		// Allow watch context but not repl (repl can mutate state).
-	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	context_ := "repl"
-	if sess.ReadOnly {
-		context_ = "watch"
-	}
 	if args.TimeoutSec > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, time.Duration(args.TimeoutSec*float64(time.Second)))

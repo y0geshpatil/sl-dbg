@@ -217,7 +217,7 @@ Global / module-level variables.
 Expand a previously returned object reference.
 
 ### `sl-dbg eval <expression> [--frame N]`
-Evaluate. May have side effects unless `--read-only` is set on the session.
+Evaluate an expression in the current (or specified) frame. **Refused on `--read-only` sessions** (issue #56) because expression-form evaluation in every supported language permits arbitrary side effects (`__import__('os').system(...)`, static-method calls, etc.); the DAP `context: "watch"` hint is advisory, not a sandbox. Start a new session without `--read-only` if you need eval.
 ```json
 {"ok":true,"data":{"result":"7","type":"int"}}
 ```
