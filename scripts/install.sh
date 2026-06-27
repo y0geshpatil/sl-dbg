@@ -43,23 +43,16 @@ detect_arch() {
 OS="$(detect_os)"
 ARCH="$(detect_arch)"
 
-# Resolve "latest" to a concrete tag. We avoid the GitHub API to dodge
-# the 60-req/hr unauthenticated rate limit; the /releases/latest URL
-# redirects to /tag/<version> which we can parse with `curl -I`.
+# Resolve "latest" to a concrete tag. Use the public API (no auth needed
+# for public repos). We avoid jq by grep+sed on the JSON.
 resolve_version() {
   if [ "$VERSION" != "latest" ]; then
     echo "$VERSION"
     return
   fi
-  local effective
-  effective="$(curl -fsSLI -o /dev/null -w '%{url_effective}\n' \
-    "https://github.com/${REPO}/releases/latest")"
-  # When the repo has no releases yet, GitHub does not redirect to
-  # /tag/<v>; the URL just lands back on /releases. Detect that.
-  case "$effective" in
-    *"/tag/"*) echo "${effective##*/tag/}" ;;
-    *)         echo "" ;;
-  esac
+  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
+    | grep -m1 '"tag_name"' \
+    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
 }
 
 VERSION="$(resolve_version)"
