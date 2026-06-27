@@ -59,7 +59,7 @@ func (s *Server) handleWatch(ctx context.Context, req proto.Request) proto.Respo
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Infer action when the caller passes only payload fields. Common
 	// pattern: MCP agents call debug_watch with `expression` but no
@@ -142,7 +142,7 @@ func (s *Server) handleGlobals(ctx context.Context, req proto.Request) proto.Res
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {
@@ -220,7 +220,7 @@ func (s *Server) handleFields(ctx context.Context, req proto.Request) proto.Resp
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	vars, err := sess.Client().Variables(ctx, args.Ref)
 	if err != nil {
@@ -246,7 +246,7 @@ func (s *Server) handleSource(ctx context.Context, req proto.Request) proto.Resp
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 
 	file := args.File
@@ -358,7 +358,7 @@ func (s *Server) handleOutput(req proto.Request) proto.Response {
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	var since time.Time
 	if args.Since != "" {
@@ -387,7 +387,7 @@ func (s *Server) handleEvents(req proto.Request) proto.Response {
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	var since time.Time
 	if args.Since != "" {
@@ -416,7 +416,7 @@ func (s *Server) handleListen(ctx context.Context, req proto.Request) proto.Resp
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Issue #30: short-circuit when the session is already paused/terminal.
 	// The old code installed a waiter and blocked for the full timeout even
@@ -446,7 +446,7 @@ func (s *Server) handleListen(ctx context.Context, req proto.Request) proto.Resp
 func (s *Server) handleRestart(ctx context.Context, req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if !sess.Caps().SupportsRestartRequest {
 		return errResp("UNSUPPORTED_FEATURE",
@@ -471,7 +471,7 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -529,7 +529,7 @@ func (s *Server) handleBreakEx(ctx context.Context, req proto.Request) proto.Res
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -605,7 +605,7 @@ func (s *Server) handleUntil(ctx context.Context, req proto.Request) proto.Respo
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Resolve current source file from last pause location.
 	_, _, loc := sess.LastPause()
@@ -729,7 +729,7 @@ func (s *Server) handlePrint(ctx context.Context, req proto.Request) proto.Respo
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if args.TimeoutSec > 0 {
 		var cancel context.CancelFunc
@@ -802,8 +802,19 @@ func expandRefFiltered(ctx context.Context, sess *session.Session, ref, depth, m
 			Type:  v.Type,
 			Ref:   v.VariablesReference,
 		}
-		if v.VariablesReference > 0 && depth-1 > 0 {
-			kids, trunc, err := expandRefFiltered(ctx, sess, v.VariablesReference, depth-1, maxItems, showSpecial)
+		// Issue #3: java-debug shows wrapper primitives nested in
+		// containers as opaque object refs (e.g. "Integer@318"). Unwrap
+		// them to their primitive value with a tiny eval so list/map
+		// inspection isn't useless. Best-effort: on any error we fall back
+		// to the original opaque value.
+		if sess.Lang == "java" && v.VariablesReference > 0 && isJavaWrapperType(v.Type) {
+			if prim, ok := unwrapJavaWrapper(ctx, sess, v.VariablesReference); ok {
+				n.Value = prim
+				n.Ref = 0 // primitive — no further expansion useful
+			}
+		}
+		if n.Ref > 0 && depth-1 > 0 {
+			kids, trunc, err := expandRefFiltered(ctx, sess, n.Ref, depth-1, maxItems, showSpecial)
 			if err == nil {
 				n.Children = kids
 				n.Truncated = trunc
@@ -812,6 +823,35 @@ func expandRefFiltered(ctx context.Context, sess *session.Session, ref, depth, m
 		out = append(out, n)
 	}
 	return out, truncated, nil
+}
+
+// isJavaWrapperType returns true for the eight boxed primitives plus String,
+// matching the type strings java-debug uses (sometimes fully-qualified,
+// sometimes not). Issue #3.
+func isJavaWrapperType(t string) bool {
+	switch t {
+	case "Integer", "Long", "Short", "Byte", "Float", "Double", "Boolean", "Character",
+		"java.lang.Integer", "java.lang.Long", "java.lang.Short", "java.lang.Byte",
+		"java.lang.Float", "java.lang.Double", "java.lang.Boolean", "java.lang.Character":
+		return true
+	}
+	return false
+}
+
+// unwrapJavaWrapper reads the wrapper's `value` field and returns it as a
+// human-readable primitive string. Returns ("", false) on any adapter error.
+// Issue #3.
+func unwrapJavaWrapper(ctx context.Context, sess *session.Session, ref int) (string, bool) {
+	r, err := sess.Client().Variables(ctx, ref)
+	if err != nil {
+		return "", false
+	}
+	for _, f := range r.Body.Variables {
+		if f.Name == "value" {
+			return f.Value, true
+		}
+	}
+	return "", false
 }
 
 // isPythonSpecial matches debugpy's container labels and __dunder__ names.

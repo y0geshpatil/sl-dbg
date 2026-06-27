@@ -34,10 +34,54 @@ type Server struct {
 	mu       sync.Mutex
 	closing  bool
 
+	// startedAt is set when Run() begins listening. Used to enrich
+	// SESSION_NOT_FOUND errors with a "daemon recently respawned" hint
+	// when the caller's session id can't be found. Issue #28.
+	startedAt time.Time
+
 	// Policy + audit are loaded from SL_DBG_* env vars at daemon startup.
 	// Zero values = legacy permissive behavior (issues #18–#23).
 	policy Policy
 	audit  *AuditLogger
+}
+
+// sessionNotFound builds an error response that explains the most-likely
+// cause: either the id is genuinely unknown, or the daemon respawned after
+// a crash and all in-memory sessions were lost. Issue #28.
+func (s *Server) sessionNotFound(sid string, cause string) proto.Response {
+	uptime := time.Since(s.startedAt)
+	live := len(s.mgr.List())
+	msg := cause
+	if msg == "" {
+		msg = fmt.Sprintf("no session %q", sid)
+	}
+	if live == 0 && uptime < 5*time.Minute {
+		return errResp("DAEMON_RESPAWNED",
+			fmt.Sprintf("session %q not found; daemon was started %s ago and has no sessions — it likely respawned after a crash/restart", sid, uptime.Round(time.Second)),
+			"re-issue `debug_start` / `debug_attach` to recreate the session; any pre-respawn session ids are gone")
+	}
+	return errResp("SESSION_NOT_FOUND", msg, fmt.Sprintf("daemon uptime %s, %d live session(s) — call `debug_sessions` for current ids", uptime.Round(time.Second), live))
+}
+
+// runInspect dispatches an inspection-class handler under the session's
+// per-session inspectMu so concurrent inspection chains (stack→scope→
+// variables, eval, print) serialize and don't race the variablesReference
+// lifecycle (STALE_FRAME). Issue #25.
+//
+// When the session id is unknown, we skip the lock and let the handler
+// itself return SESSION_NOT_FOUND so the error shape stays consistent.
+// Returns the handler's response unmodified.
+func (s *Server) runInspect(ctx context.Context, req proto.Request, h func(context.Context, proto.Request) proto.Response) proto.Response {
+	sess, err := s.mgr.Get(req.Sess)
+	if err != nil {
+		return h(ctx, req)
+	}
+	var resp proto.Response
+	_ = sess.Inspect(func() error {
+		resp = h(ctx, req)
+		return nil
+	})
+	return resp
 }
 
 // Run starts the daemon and blocks until shutdown or fatal error.
@@ -58,9 +102,10 @@ func Run() error {
 	logger := log.New(lf, "sl-dbgd ", log.LstdFlags|log.Lmicroseconds)
 
 	srv := &Server{
-		mgr:    session.NewManager(),
-		logger: logger,
-		policy: LoadPolicyFromEnv(),
+		mgr:       session.NewManager(),
+		logger:    logger,
+		policy:    LoadPolicyFromEnv(),
+		startedAt: time.Now(),
 	}
 	audit, aerr := srv.policy.OpenAudit()
 	if aerr != nil {
@@ -189,23 +234,23 @@ func (s *Server) handle(req proto.Request) proto.Response {
 	case proto.CmdPause:
 		return s.handlePause(ctx, req)
 	case proto.CmdStack:
-		return s.handleStack(ctx, req)
+		return s.runInspect(ctx, req, s.handleStack)
 	case proto.CmdThreads:
-		return s.handleThreads(ctx, req)
+		return s.runInspect(ctx, req, s.handleThreads)
 	case proto.CmdLocals:
-		return s.handleLocals(ctx, req)
+		return s.runInspect(ctx, req, s.handleLocals)
 	case proto.CmdEval:
-		return s.handleEval(ctx, req)
+		return s.runInspect(ctx, req, s.handleEval)
 	case proto.CmdSet:
-		return s.handleSet(ctx, req)
+		return s.runInspect(ctx, req, s.handleSet)
 	case proto.CmdSnapshot:
-		return s.handleSnapshot(ctx, req)
+		return s.runInspect(ctx, req, s.handleSnapshot)
 	case proto.CmdWatch:
 		return s.handleWatch(ctx, req)
 	case proto.CmdGlobals:
-		return s.handleGlobals(ctx, req)
+		return s.runInspect(ctx, req, s.handleGlobals)
 	case proto.CmdFields:
-		return s.handleFields(ctx, req)
+		return s.runInspect(ctx, req, s.handleFields)
 	case proto.CmdSource:
 		return s.handleSource(ctx, req)
 	case proto.CmdOutput:
@@ -223,7 +268,7 @@ func (s *Server) handle(req proto.Request) proto.Response {
 	case proto.CmdUntil:
 		return s.handleUntil(ctx, req)
 	case proto.CmdPrint:
-		return s.handlePrint(ctx, req)
+		return s.runInspect(ctx, req, s.handlePrint)
 	default:
 		return errResp("UNKNOWN_COMMAND", fmt.Sprintf("unknown command: %q", req.Cmd), "")
 	}
@@ -376,7 +421,7 @@ func (s *Server) handleUse(req proto.Request) proto.Response {
 		return errResp("USAGE_ERROR", err.Error(), "")
 	}
 	if err := s.mgr.SetDefault(v.ID); err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	return ok(map[string]string{"default": v.ID})
 }
@@ -392,8 +437,7 @@ func (s *Server) handleStop(req proto.Request) proto.Response {
 	// Issue #48: don't silently report success for a session id the daemon
 	// has never seen. Idempotency over an unknown id hid bugs in callers.
 	if _, err := s.mgr.Get(sid); err != nil {
-		return errResp("SESSION_NOT_FOUND", fmt.Sprintf("no session %q", sid),
-			"call `debug_sessions` to see live ids")
+		return s.sessionNotFound(sid, err.Error())
 	}
 	s.mgr.Remove(sid)
 	return ok(proto.SessionResult{SessionID: sid, State: string(session.StateTerminated)})
@@ -402,7 +446,7 @@ func (s *Server) handleStop(req proto.Request) proto.Response {
 func (s *Server) handleState(req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	st := string(sess.State())
 	// For terminal states, the previously-cached pause reason/location/thread
@@ -433,7 +477,7 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -587,7 +631,7 @@ func countLines(path string) int {
 func (s *Server) handleBreaks(req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Initialize as empty slice — never return null. Issue #12: agents iterate
 	// the array, and `null` forces them to special-case the empty-list path.
@@ -627,7 +671,7 @@ func (s *Server) handleUnbreak(ctx context.Context, req proto.Request) proto.Res
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -687,7 +731,7 @@ func (s *Server) handleExec(ctx context.Context, req proto.Request, kind execKin
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -771,7 +815,7 @@ func clearOnceAt(ctx context.Context, sess *session.Session, file string, line i
 func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Issue #10: if the session has already exited/terminated, don't bother
 	// the adapter and don't wait 10s. Surface the terminal state immediately.
@@ -825,7 +869,7 @@ func (s *Server) handleStack(ctx context.Context, req proto.Request) proto.Respo
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	tid := args.Thread
 	if tid == 0 {
@@ -856,7 +900,7 @@ func (s *Server) handleStack(ctx context.Context, req proto.Request) proto.Respo
 func (s *Server) handleThreads(ctx context.Context, req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	r, err := sess.Client().Threads(ctx)
 	if err != nil {
@@ -874,7 +918,7 @@ func (s *Server) handleLocals(ctx context.Context, req proto.Request) proto.Resp
 	_ = unmarshalArgs(req.Args, &args)
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {
@@ -959,7 +1003,7 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	// Policy: eval deny-list (#19). Substring-match defeats the obvious
 	// Java side-effect classes that bypass the `context: "watch"` hint.
@@ -1042,7 +1086,7 @@ func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Respons
 	}
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
@@ -1076,7 +1120,7 @@ func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Respons
 func (s *Server) handleSnapshot(ctx context.Context, req proto.Request) proto.Response {
 	sess, err := s.mgr.Get(req.Sess)
 	if err != nil {
-		return errResp("SESSION_NOT_FOUND", err.Error(), "")
+		return s.sessionNotFound(req.Sess, err.Error())
 	}
 	state := string(sess.State())
 	out := proto.SnapshotResult{State: state}

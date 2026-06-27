@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	godap "github.com/google/go-dap"
@@ -54,6 +55,12 @@ type Session struct {
 	exitCode        *int
 	bpNextLocalID   int
 	bpsByID         map[int]*BP // local id -> BP info
+
+	// inspectMu serialises inspection chains (stack→scope→variables, eval,
+	// print, fields). Two concurrent inspections against the same paused
+	// session would otherwise race on the variablesReference lifecycle and
+	// surface as STALE_FRAME. Issue #25.
+	inspectMu sync.Mutex
 
 	// lastTerminal captures the most recent exited/terminated event so that
 	// late waiters (`listen` issued after the program already died) get an
@@ -240,6 +247,10 @@ func (m *Manager) Remove(sid string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.sessions[sid]; ok {
+		// Issue #4: persist watch expressions so a later session against
+		// the same (lang, program, cwd) can resurrect them. Best-effort:
+		// I/O errors are swallowed because Close must always succeed.
+		_ = s.SaveWatches()
 		s.Close()
 		delete(m.sessions, sid)
 		if m.defID == sid {
@@ -293,15 +304,19 @@ func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Sess
 	s.SourceRoots = args.SourceRoots
 	s.ReadOnly = args.ReadOnly
 
+	// Issue #40: subscribe BEFORE initialize. Per DAP spec the adapter
+	// may emit 'initialized' immediately after the initialize response
+	// (dlv does this). If the event pump isn't running yet, the event
+	// lands in the read loop with no subscribers and is dropped — and
+	// we'd then wait 15s for an event that already came and went.
+	initialized := make(chan struct{}, 1)
+	s.startEventPump(initialized)
+
 	if _, err := s.cli.Initialize(ctx, spec.AdapterID); err != nil {
 		s.Close()
 		return nil, fmt.Errorf("dap initialize: %w", err)
 	}
 	s.caps = s.cli.Caps
-
-	// Subscribe BEFORE launch so we receive "initialized" event.
-	initialized := make(chan struct{}, 1)
-	s.startEventPump(initialized)
 
 	// Send launch asynchronously. debugpy holds the launch response until
 	// configurationDone, so we must not block on it here.
@@ -341,6 +356,9 @@ func (m *Manager) CreateLaunch(ctx context.Context, args proto.StartArgs) (*Sess
 	}
 
 	m.register(s)
+	// Issue #4: best-effort restore of any persisted watch expressions for
+	// this (lang, program, cwd) tuple. Silently no-ops when no cache exists.
+	_ = s.LoadWatches()
 	return s, nil
 }
 
@@ -382,14 +400,15 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 		s.Attached = fmt.Sprintf("pid:%d", args.PID)
 	}
 
+	// Issue #40: subscribe BEFORE initialize. See CreateLaunch for rationale.
+	initialized := make(chan struct{}, 1)
+	s.startEventPump(initialized)
+
 	if _, err := s.cli.Initialize(ctx, spec.AdapterID); err != nil {
 		s.Close()
 		return nil, err
 	}
 	s.caps = s.cli.Caps
-
-	initialized := make(chan struct{}, 1)
-	s.startEventPump(initialized)
 
 	attachCh, err := s.cli.AttachAsync(attachArgs)
 	if err != nil {
@@ -534,7 +553,7 @@ func (m *Manager) startAdapterTCP(_ adapter.Spec, argvTpl []string, lang string)
 }
 
 func newSession(cli *dap.Client, cmd *exec.Cmd, lang string) *Session {
-	return &Session{
+	s := &Session{
 		ID:            newID(),
 		Lang:          lang,
 		state:         StateInitializing,
@@ -544,6 +563,59 @@ func newSession(cli *dap.Client, cmd *exec.Cmd, lang string) *Session {
 		proc:          cmd,
 		doneCh:        make(chan struct{}),
 	}
+	// Issue #27: watch the adapter process. When it dies without first
+	// emitting a DAP terminated/exited event (e.g. the debuggee was
+	// SIGKILL'd and the adapter died with it), synthesize a terminated
+	// transition with the captured signal/exit code so callers don't see
+	// a stale "paused" state.
+	if cmd != nil && cmd.Process != nil {
+		go s.watchAdapterExit()
+	}
+	return s
+}
+
+// watchAdapterExit blocks on proc.Wait and, if the session is still in a
+// non-terminal state when the adapter dies, transitions to terminated with
+// signal-aware exit info. Idempotent: a real DAP exited/terminated event
+// arriving first wins and this becomes a no-op. Issue #27.
+func (s *Session) watchAdapterExit() {
+	err := s.proc.Wait()
+	s.mu.Lock()
+	if s.state == StateExited || s.state == StateTerminated {
+		s.mu.Unlock()
+		return
+	}
+	// Decode the exit/signal info.
+	exitCode := 0
+	signalName := ""
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			ws := ee.ProcessState.Sys()
+			if status, ok := ws.(syscall.WaitStatus); ok {
+				if status.Signaled() {
+					sig := status.Signal()
+					signalName = sig.String()
+					exitCode = 128 + int(sig)
+				} else {
+					exitCode = status.ExitStatus()
+				}
+			} else {
+				exitCode = ee.ProcessState.ExitCode()
+			}
+		}
+	} else if s.proc.ProcessState != nil {
+		exitCode = s.proc.ProcessState.ExitCode()
+	}
+	reason := "adapter-exited"
+	if signalName != "" {
+		reason = "adapter-killed-" + signalName
+	}
+	s.state = StateTerminated
+	ecCopy := exitCode
+	s.exitCode = &ecCopy
+	s.lastTerminal = &stopEvent{reason: reason, terminated: true, exited: &ecCopy}
+	s.mu.Unlock()
+	s.notifyWaiters(stopEvent{reason: reason, terminated: true, exited: &ecCopy})
 }
 
 func pickFreePort() (int, error) {
@@ -1078,6 +1150,16 @@ func (s *Session) Watches() []*Watch {
 	out := make([]*Watch, len(s.watches))
 	copy(out, s.watches)
 	return out
+}
+
+// Inspect acquires the per-session inspection mutex for the duration of fn.
+// Use to serialise multi-step inspection chains (stack→scopes→variables,
+// print/expand, eval) so concurrent callers don't race the
+// variablesReference lifecycle and surface STALE_FRAME. Issue #25.
+func (s *Session) Inspect(fn func() error) error {
+	s.inspectMu.Lock()
+	defer s.inspectMu.Unlock()
+	return fn()
 }
 
 // ----- function BP / exception filter helpers -----
