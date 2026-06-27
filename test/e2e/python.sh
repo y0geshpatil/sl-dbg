@@ -15,6 +15,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
+# eval/set/watch/conditional-bp are default-denied on the daemon (#54); enable for tests.
+export SL_DBG_ALLOW_EVAL="${SL_DBG_ALLOW_EVAL:-1}"
 PROG="$REPO/examples/python/buggy.py"
 
 if ! command -v python3 >/dev/null 2>&1; then

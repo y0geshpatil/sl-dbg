@@ -13,6 +13,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
+# eval/set/watch/conditional-bp are default-denied on the daemon (#54); enable for tests.
+export SL_DBG_ALLOW_EVAL="${SL_DBG_ALLOW_EVAL:-1}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "SKIP: java not on PATH" >&2; exit 77

@@ -116,9 +116,9 @@ func Run() error {
 	if srv.policy.MaxSessions > 0 {
 		srv.mgr.SetMaxSessions(srv.policy.MaxSessions)
 	}
-	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q deny_eval_patterns=%d eval_disabled=%v",
+	logger.Printf("policy: allow_program=%d allow_source_root=%d max_sessions=%d audit=%q allow_eval=%t deny_eval_patterns=%d",
 		len(srv.policy.AllowProgram), len(srv.policy.AllowSourceRoot), srv.policy.MaxSessions,
-		srv.policy.AuditLogPath, len(srv.policy.DenyEvalPatterns), srv.policy.EvalDisabled)
+		srv.policy.AuditLogPath, srv.policy.AllowEval, len(srv.policy.DenyEvalPatterns))
 
 	// Refuse to start if another daemon is alive.
 	stalePid := 0
@@ -488,6 +488,15 @@ func (s *Server) handleBreak(ctx context.Context, req proto.Request) proto.Respo
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
+	}
+	// Policy: a breakpoint condition is an expression the adapter will
+	// evaluate every time the line is hit. Issue #54.
+	if args.Condition != "" {
+		if err := s.policy.EvalEnabled(); err != nil {
+			s.audit.Log("break.disabled", sess.ID, map[string]interface{}{"location": args.Location, "condition": args.Condition})
+			return errResp("EVAL_DISABLED", err.Error(),
+				"conditional breakpoints evaluate code at the target; start the daemon with SL_DBG_ALLOW_EVAL=1, or omit --condition")
+		}
 	}
 	file, line, err := parseLocation(args.Location)
 	if err != nil {
@@ -1021,15 +1030,23 @@ func (s *Server) handleEval(ctx context.Context, req proto.Request) proto.Respon
 	if err != nil {
 		return s.sessionNotFound(req.Sess, err.Error())
 	}
-	// Issue #56 (security): expression-form eval in every supported language
-	// permits arbitrary side effects (Python `__import__('os').system(...)`,
-	// Java static-method calls, Go DAP `call` semantics). The DAP
-	// `context: "watch"` hint is purely advisory and does not sandbox the
-	// adapter. Refuse all eval against a read-only session — match the MCP
-	// transport, which hides `debug_eval` under --read-only.
+	// Issue #56 (security): expression-form eval permits arbitrary side
+	// effects (Python `__import__('os').system(...)`, Java static-method
+	// calls, Go DAP `call` semantics). Refuse against a read-only session
+	// — match the MCP transport, which hides `debug_eval` under --read-only.
+	// Check the per-session gate before the daemon-wide AllowEval check so
+	// the response code reflects the session's posture when both fire.
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		s.audit.Log("eval.denied", sess.ID, map[string]interface{}{"expr": args.Expression, "reason": "read_only"})
 		return *rerr
+	}
+	// Policy: eval must be explicitly enabled on the daemon (#54). The
+	// substring deny-list (#19) is a secondary CLI typo-guard, NOT a
+	// security boundary — it is trivially bypassable via reflection.
+	if err := s.policy.EvalEnabled(); err != nil {
+		s.audit.Log("eval.disabled", sess.ID, map[string]interface{}{"expr": args.Expression})
+		return errResp("EVAL_DISABLED", err.Error(),
+			"start the daemon with SL_DBG_ALLOW_EVAL=1 to permit eval (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
 	}
 	// Policy: eval deny-list (#19). Substring-match defeats the obvious
 	// Java side-effect classes that bypass the `context: "watch"` hint.
@@ -1110,6 +1127,13 @@ func (s *Server) handleSet(ctx context.Context, req proto.Request) proto.Respons
 	}
 	if rerr := refuseIfReadOnly(sess); rerr != nil {
 		return *rerr
+	}
+	// Policy: `set` mutates target state via the adapter's expression
+	// evaluator and is treated as eval for SL_DBG_ALLOW_EVAL purposes (#54).
+	if err := s.policy.EvalEnabled(); err != nil {
+		s.audit.Log("set.disabled", sess.ID, map[string]interface{}{"name": args.Name, "value": args.Value})
+		return errResp("EVAL_DISABLED", err.Error(),
+			"start the daemon with SL_DBG_ALLOW_EVAL=1 to permit set (audit log strongly recommended via SL_DBG_AUDIT_LOG)")
 	}
 	frameID, err := resolveFrameID(ctx, sess, args.Frame)
 	if err != nil {

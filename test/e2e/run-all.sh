@@ -5,6 +5,9 @@ set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$DIR/../.." && pwd)"
 SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
+# e2e suites exercise eval / set / watch / conditional breakpoints; the daemon
+# default-denies them per #54 so explicitly opt in for the test run.
+export SL_DBG_ALLOW_EVAL=1
 PASS=0; SKIP=0; FAIL=0
 for t in "$DIR"/*.sh; do
   case "$(basename "$t")" in run-all.sh) continue ;; esac

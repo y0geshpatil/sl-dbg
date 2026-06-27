@@ -16,18 +16,29 @@
 //   SL_DBG_AUDIT_LOG           — file path. When non-empty, every start /
 //                                attach / eval / set / break-with-condition is
 //                                appended as one NDJSON line. Issue #23.
-//   SL_DBG_DENY_EVAL_PATTERNS  — colon-separated substring list. When the eval
-//                                expression contains any of these, the call is
-//                                rejected with EVAL_DENIED. Defaults to a
-//                                hardcoded list of Java side-effect classes
-//                                (FileOutputStream, ProcessBuilder, …) when
-//                                the daemon sees a read-only session — issue
-//                                #19. Set to "-" to disable.
-//   SL_DBG_ALLOW_EVAL          — "0"/"false"/"no" disables `eval` entirely
-//                                (handleEval returns EVAL_DENIED). Default
-//                                "1". Set by `sl-dbg mcp --safe` to make the
-//                                eval RCE surface unreachable to LLM clients.
-//                                Issue #53.
+//   SL_DBG_ALLOW_EVAL          — boolean (1/true/yes). When unset or false
+//                                (default), every code-evaluating command
+//                                (eval, set, watch-add, break with --condition)
+//                                is refused with EVAL_DISABLED. This is the
+//                                only real security boundary against
+//                                LLM-driven MCP callers; the daemon cannot
+//                                tell CLI vs MCP traffic apart on the socket,
+//                                so the knob is daemon-wide. `sl-dbg mcp
+//                                --safe` keeps this unset; pass --allow-eval
+//                                to opt in. Issue #53 / #54.
+//   SL_DBG_DENY_EVAL_PATTERNS  — colon-separated substring list applied AFTER
+//                                SL_DBG_ALLOW_EVAL=1 lets the call through.
+//                                NOT a security boundary — a literal token
+//                                deny-list is trivially bypassable via
+//                                reflection / dunder traversal / getattr.
+//                                Kept only as a best-effort CLI convenience
+//                                (typo guard against common shell mistakes).
+//                                Defaults to a hardcoded list of Java
+//                                side-effect classes. Set to "-" to disable.
+//                                Issue #19 / #54.
+//   SL_DBG_INSECURE            — boolean. When set, `sl-dbg mcp` will start
+//                                without --safe (legacy permissive mode).
+//                                Prints a loud startup banner. Issue #53.
 package daemon
 
 import (
@@ -49,8 +60,8 @@ type Policy struct {
 	AllowSourceRoot  []string // absolute path prefixes (cleaned)
 	MaxSessions      int      // 0 = unlimited
 	AuditLogPath     string   // "" = no audit
-	DenyEvalPatterns []string // substring matches against eval expression
-	EvalDisabled     bool     // when true, handleEval returns EVAL_DENIED unconditionally (issue #53)
+	AllowEval        bool     // SL_DBG_ALLOW_EVAL; default false = deny eval/set/conditional-bp (issue #53/#54)
+	DenyEvalPatterns []string // substring matches against eval expression (NOT a security boundary)
 }
 
 // LoadPolicyFromEnv builds a Policy from the SL_DBG_* environment variables.
@@ -59,6 +70,7 @@ func LoadPolicyFromEnv() Policy {
 		AllowProgram:    splitColonList(os.Getenv("SL_DBG_ALLOW_PROGRAM")),
 		AllowSourceRoot: cleanAbs(splitColonList(os.Getenv("SL_DBG_ALLOW_SOURCE_ROOT"))),
 		AuditLogPath:    strings.TrimSpace(os.Getenv("SL_DBG_AUDIT_LOG")),
+		AllowEval:       parseBoolEnv(os.Getenv("SL_DBG_ALLOW_EVAL")),
 	}
 	if v := strings.TrimSpace(os.Getenv("SL_DBG_MAX_SESSIONS")); v != "" {
 		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
@@ -81,15 +93,19 @@ func LoadPolicyFromEnv() Policy {
 	default:
 		p.DenyEvalPatterns = splitColonList(raw)
 	}
-	if v := strings.TrimSpace(os.Getenv("SL_DBG_ALLOW_EVAL")); v != "" {
-		switch strings.ToLower(v) {
-		case "0", "false", "no", "off":
-			p.EvalDisabled = true
-		case "1", "true", "yes", "on":
-			p.EvalDisabled = false
-		}
-	}
 	return p
+}
+
+// parseBoolEnv accepts the usual truthy spellings (1/true/yes/on, case-
+// insensitive). Anything else — including empty — is false. Used by
+// SL_DBG_ALLOW_EVAL: default-deny is the whole point of issue #54, so we
+// deliberately do NOT treat unrecognised values as true.
+func parseBoolEnv(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
 }
 
 func splitColonList(s string) []string {
@@ -160,13 +176,27 @@ func (p Policy) SourcePathAllowed(path string) error {
 	return fmt.Errorf("path %q is outside SL_DBG_ALLOW_SOURCE_ROOT allowlist", path)
 }
 
+// EvalEnabled returns nil when the daemon is configured to allow expression
+// evaluation (SL_DBG_ALLOW_EVAL=1). Otherwise returns a non-nil error whose
+// message is suitable for the EVAL_DISABLED response. Issue #54.
+//
+// This is the *real* security boundary against LLM-driven MCP callers.
+// EvalAllowed (the substring deny-list) is a secondary CLI typo-guard that
+// runs *after* this check passes; it is trivially bypassable and must never
+// be relied upon for security.
+func (p Policy) EvalEnabled() error {
+	if p.AllowEval {
+		return nil
+	}
+	return fmt.Errorf("eval is disabled for this daemon")
+}
+
 // EvalAllowed returns nil when expr does not match any deny pattern. Issue
 // #19. The deny set is intentionally substring-based (cheap, no parser
-// dependency); false positives are acceptable for a security knob.
+// dependency) and is NOT a security boundary — it is trivially bypassable
+// via reflection / dunder traversal / getattr (issue #54). It survives only
+// as a typo-guard. The real gate is EvalEnabled / SL_DBG_ALLOW_EVAL.
 func (p Policy) EvalAllowed(expr string) error {
-	if p.EvalDisabled {
-		return fmt.Errorf("eval is disabled by policy (SL_DBG_ALLOW_EVAL=0); restart daemon without it to re-enable")
-	}
 	for _, needle := range p.DenyEvalPatterns {
 		if strings.Contains(expr, needle) {
 			return fmt.Errorf("expression contains deny-listed token %q (set SL_DBG_DENY_EVAL_PATTERNS=- to disable)", needle)
