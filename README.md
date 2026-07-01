@@ -64,14 +64,14 @@ attached to every tag on the [GitHub Releases tab](https://github.com/y0geshpati
 
 ```bash
 # 1. Universal curl one-liner (recommended — no Go toolchain needed):
-curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
 
 # 2. Pin a specific version:
-curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/install.sh | bash -s -- v0.1.0
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash -s -- v0.1.0
 
 # 3. Install to a per-user dir (no sudo):
 INSTALL_DIR=$HOME/.local/bin \
-  curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
 
 # 4. Direct download — grab any .tar.gz from:
 #   https://github.com/y0geshpatil/sl-dbg/releases
@@ -145,7 +145,7 @@ or `--insecure` to fall back to the legacy permissive mode (not recommended).
 ### Uninstall
 ```bash
 # Remove the binary AND the sl-dbg entry from every detected agent's MCP config
-curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash
 
 # Or surgically, just one agent
 sl-dbg mcp uninstall claude       # also: cursor | vscode | codex | copilot | all

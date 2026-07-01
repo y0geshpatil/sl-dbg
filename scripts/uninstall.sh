@@ -3,10 +3,10 @@
 # MCP registrations. Reverses scripts/install.sh.
 #
 # Usage:
-#   curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash
 #
 # Skip MCP cleanup (only remove the binary):
-#   curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash -s -- --keep-mcp
+#   curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash -s -- --keep-mcp
 #
 # Override install dir (must match where it was installed):
 #   INSTALL_DIR=$HOME/.local/bin curl -fsSL .../uninstall.sh | bash
@@ -56,5 +56,5 @@ What this did NOT remove:
   • Backups created during install ('*.bak.<timestamp>' next to each agent config).
 
 Reinstall later with:
-  curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
 EOF

@@ -149,5 +149,5 @@ Next steps:
   Docs: https://y0geshpatil.github.io/sl-dbg-site/
 
 To uninstall later:
-  curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/uninstall.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash
 EOF
