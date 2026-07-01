@@ -61,7 +61,8 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 
 Pick the method that fits your environment. Release artifacts are
 published to the public mirror **y0geshpatil/sl-dbg-releases** — no
-authentication required, even though the source repo is private.
+authentication required. Source lives here at
+[y0geshpatil/sl-dbg](https://github.com/y0geshpatil/sl-dbg).
 
 ```bash
 # 1. Universal curl one-liner (recommended — no Go toolchain needed):

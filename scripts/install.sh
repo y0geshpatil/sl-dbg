@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # sl-dbg installer — fetches the latest tagged release binary for the
-# current OS/arch from the PUBLIC release-mirror repo and drops it on
-# $PATH. No authentication needed even though the source repo is private,
-# because release artifacts live in y0geshpatil/sl-dbg-releases.
+# current OS/arch from the release-mirror repo and drops it on $PATH.
+# No authentication needed; release artifacts live in the public mirror
+# y0geshpatil/sl-dbg-releases. Source lives at y0geshpatil/sl-dbg
+# (Apache-2.0).
 #
 # Usage:
 #   curl -fsSL https://sl-dbg.dev/install.sh | bash
@@ -18,7 +19,7 @@
 # install completes in seconds with no compiler dependency.
 set -euo pipefail
 
-REPO="y0geshpatil/sl-dbg-releases"   # public mirror; source repo is private
+REPO="y0geshpatil/sl-dbg-releases"   # public release mirror; source at y0geshpatil/sl-dbg
 BINARY="sl-dbg"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 VERSION="${1:-latest}"

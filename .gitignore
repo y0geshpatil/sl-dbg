@@ -1,10 +1,10 @@
 # Binaries
 /bin/
 /dist/
-sl-dbg
-sl-dbgd
+/sl-dbg
+/sl-dbgd
 
-# Go build cache & test artifacts
+# Compiled test binaries only (Go's default naming for `go test -c`)
 *.test
 *.out
 *.prof

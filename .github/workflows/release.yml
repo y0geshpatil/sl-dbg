@@ -26,9 +26,9 @@ jobs:
           version: '~> v2'
           args: release --clean
         env:
-          # GoReleaser publishes the release to y0geshpatil/sl-dbg-releases
-          # (public), not to this private source repo. The cross-repo PAT
-          # must have `contents: write` on the releases repo.
+          # GoReleaser publishes the release to y0geshpatil/sl-dbg-releases,
+          # not to this source repo. The cross-repo PAT must have
+          # `contents: write` on the releases repo.
           GITHUB_TOKEN: ${{ secrets.GH_RELEASE_TOKEN }}
           # Personal access token with `repo` scope on the homebrew-sl-dbg tap.
           # Required only for the brew publishing step.

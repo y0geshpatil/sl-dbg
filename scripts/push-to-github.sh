@@ -17,8 +17,8 @@ cd "$(dirname "$0")/.."
 if git remote get-url origin >/dev/null 2>&1; then
   echo "✓ origin already set: $(git remote get-url origin)"
 else
-  echo "→ Creating private repo $REPO and pushing main..."
-  gh repo create "$REPO" --private --description "$DESC" --source=. --remote=origin --push
+  echo "→ Creating public repo $REPO and pushing main..."
+  gh repo create "$REPO" --public --description "$DESC" --source=. --remote=origin --push
 fi
 
 git push -u origin main

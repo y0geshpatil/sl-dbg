@@ -22,7 +22,7 @@ sl-dbg (private)              sl-dbg-releases (public)         sl-dbg-site (publ
    GitHub Pages on the `main` branch (Settings → Pages → Source: `main` `/`).
 3. **Create the public Homebrew tap** `y0geshpatil/homebrew-sl-dbg`
    (only needed if you want `brew install` support — optional).
-4. **Add repo secrets** under the *private* source repo's Settings →
+4. **Add repo secrets** under the source repo's Settings →
    Secrets and variables → Actions:
    - `GH_RELEASE_TOKEN` — a fine-grained PAT with **Contents: read & write**
      on `y0geshpatil/sl-dbg-releases`. GoReleaser uses this to push the
