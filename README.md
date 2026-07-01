@@ -1,4 +1,6 @@
 [![CI](https://github.com/y0geshpatil/sl-dbg/actions/workflows/ci.yml/badge.svg)](https://github.com/y0geshpatil/sl-dbg/actions/workflows/ci.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-sl--dbg--site-informational)](https://y0geshpatil.github.io/sl-dbg-site/)
 
 # sl-dbg
 
@@ -221,7 +223,7 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 | [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Intended config-file schema and CLI-flag equivalents |
 | [docs/AGENT-GUIDE.md](docs/AGENT-GUIDE.md) | How AI agents should *use* sl-dbg as a debugger |
 | [docs/SECURITY.md](docs/SECURITY.md) | Threat model & safe-use guide |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, code style, testing |
+| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | Development setup, code style, testing (see also root [CONTRIBUTING.md](CONTRIBUTING.md)) |
 | [docs/TRIAGE.md](docs/TRIAGE.md) | Issue/PR labels, priorities, and how triage works |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes and version history |
 | [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) | Community ground rules |
@@ -230,6 +232,10 @@ See [docs/DESIGN.md](docs/DESIGN.md) for the full architecture.
 ## Status
 
 Pre-1.0. Python / Go / Java adapters are fully working with field-tested coverage; the wire schema (`schema:"1"`) is considered stable. See [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Contributing
+
+Issues and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the short version and [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) for the full development guide. For anything non-trivial, please read [AGENTS.md](AGENTS.md) first (definition of done, security posture, release process).
 
 ## License
 
