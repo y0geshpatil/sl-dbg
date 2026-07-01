@@ -2,33 +2,29 @@
 
 ## Distribution model
 
-Source code lives in the **private** `y0geshpatil/sl-dbg` repo. Release
-binaries are published to the **public** mirror
-`y0geshpatil/sl-dbg-releases` so end users can install without holding
-any GitHub credentials. Docs/landing page live in
+Source, releases, and issues all live in the single public repo
+**`y0geshpatil/sl-dbg`**. Docs / landing page live in
 `y0geshpatil/sl-dbg-site` (public, served via GitHub Pages).
 
 ```
-sl-dbg (private)              sl-dbg-releases (public)         sl-dbg-site (public)
-  ├─ source code         ─►     └─ release tarballs        ◄──   └─ install.sh + index.html
-  └─ Actions: release.yml         (no source, no commits)         (GitHub Pages)
+sl-dbg (public)                              sl-dbg-site (public)
+  ├─ source code + tarballs on Releases       └─ install.sh + index.html
+  └─ Actions: ci.yml, release.yml                (GitHub Pages)
 ```
 
 ## Prerequisites (one-time setup before the first release)
 
-1. **Create the public release mirror** `y0geshpatil/sl-dbg-releases`
-   (empty public repo is enough — goreleaser pushes tags + assets).
-2. **Create the public docs site** `y0geshpatil/sl-dbg-site` and enable
+1. **Create the public docs site** `y0geshpatil/sl-dbg-site` and enable
    GitHub Pages on the `main` branch (Settings → Pages → Source: `main` `/`).
-3. **Create the public Homebrew tap** `y0geshpatil/homebrew-sl-dbg`
+2. **Create the public Homebrew tap** `y0geshpatil/homebrew-sl-dbg`
    (only needed if you want `brew install` support — optional).
-4. **Add repo secrets** under the source repo's Settings →
+3. **Add repo secrets** under `y0geshpatil/sl-dbg` Settings →
    Secrets and variables → Actions:
-   - `GH_RELEASE_TOKEN` — a fine-grained PAT with **Contents: read & write**
-     on `y0geshpatil/sl-dbg-releases`. GoReleaser uses this to push the
-     release to the public mirror.
    - `HOMEBREW_TAP_GITHUB_TOKEN` — PAT with `repo` scope on the tap repo
      (only if shipping a brew formula).
+   - No cross-repo PAT needed for the release itself — the workflow uses
+     the built-in `GITHUB_TOKEN` because releases are published to this
+     same repo.
 
 ## Cutting a release
 

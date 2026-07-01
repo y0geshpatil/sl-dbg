@@ -60,9 +60,7 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 ### Install
 
 Pick the method that fits your environment. Release artifacts are
-published to the public mirror **y0geshpatil/sl-dbg-releases** — no
-authentication required. Source lives here at
-[y0geshpatil/sl-dbg](https://github.com/y0geshpatil/sl-dbg).
+attached to every tag on the [GitHub Releases tab](https://github.com/y0geshpatil/sl-dbg/releases) — no authentication required.
 
 ```bash
 # 1. Universal curl one-liner (recommended — no Go toolchain needed):
@@ -76,7 +74,7 @@ INSTALL_DIR=$HOME/.local/bin \
   curl -fsSL https://y0geshpatil.github.io/sl-dbg-site/install.sh | bash
 
 # 4. Direct download — grab any .tar.gz from:
-#   https://github.com/y0geshpatil/sl-dbg-releases/releases
+#   https://github.com/y0geshpatil/sl-dbg/releases
 # Then: tar -xzf sl-dbg_*.tar.gz && mv sl-dbg /usr/local/bin/
 ```
 
@@ -92,7 +90,7 @@ sl-dbg install-adapter java             # just the embedded Java DAP launcher
 
 Tagged releases (and the binaries `install.sh` pulls) are produced by
 [GoReleaser](.goreleaser.yaml) via the `release` GitHub Actions workflow
-on every `git tag v*` push, and published to the public release mirror.
+on every `git tag v*` push, and attached to the [Releases tab](https://github.com/y0geshpatil/sl-dbg/releases).
 See [docs/RELEASING.md](docs/RELEASING.md) for the cut-a-release playbook.
 
 ### Debug a Python script
