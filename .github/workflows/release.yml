@@ -24,7 +24,10 @@ jobs:
         with:
           distribution: goreleaser
           version: '~> v2'
-          args: release --clean
+          # Skip the Homebrew tap step until y0geshpatil/homebrew-sl-dbg
+          # exists and HOMEBREW_TAP_GITHUB_TOKEN is populated. Drop the
+          # --skip flag once the tap is set up.
+          args: release --clean --skip=homebrew
         env:
           # Uses the built-in GITHUB_TOKEN — release publishes to this same repo.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
