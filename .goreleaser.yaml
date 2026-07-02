@@ -96,4 +96,4 @@ brews:
       Language adapters are NOT bundled. After install run:
         sl-dbg install-adapter all
       to fetch / build them (debugpy via pip, dlv via go install,
-      Java adapter via Maven build).
+      Java adapter downloaded automatically — no Maven required).

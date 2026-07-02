@@ -154,6 +154,10 @@ func installJava(force bool) error {
 	// matches the running binary's version. This is the normal path for users
 	// who installed sl-dbg via the install script or Homebrew and don't have a
 	// source checkout or Maven available.
+	//
+	// buildinfo.Version is injected by goreleaser as the bare semver ("1.2.3"),
+	// without a leading "v". GitHub release tags use the "v" prefix, so we add
+	// it when constructing the download URL.
 	if binaryVersion := buildinfo.Version; isReleaseVersion(binaryVersion) {
 		url := fmt.Sprintf("https://github.com/y0geshpatil/sl-dbg/releases/download/v%s/sl-dbg-java-adapter.jar", binaryVersion)
 		stepInfo("java", "downloading pre-built adapter jar from GitHub Releases (%s)", url)
