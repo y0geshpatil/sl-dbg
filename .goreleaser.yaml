@@ -50,6 +50,8 @@ release:
   github:
     owner: y0geshpatil
     name: sl-dbg
+  extra_files:
+    - glob: adapters/java-launcher/target/sl-dbg-java-adapter.jar
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"

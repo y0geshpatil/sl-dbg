@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/y0geshpatil/sl-dbg/internal/buildinfo"
 )
 
 // newInstallAdapterCmdImpl returns the real `install-adapter` command.
@@ -149,7 +150,21 @@ func installJava(force bool) error {
 		return downloadFile(url, destPath)
 	}
 
-	// Strategy 2: build from in-tree source if we can find the Maven project.
+	// Strategy 2: auto-download the pre-built jar from the GitHub release that
+	// matches the running binary's version. This is the normal path for users
+	// who installed sl-dbg via the install script or Homebrew and don't have a
+	// source checkout or Maven available.
+	if binaryVersion := buildinfo.Version; isReleaseVersion(binaryVersion) {
+		url := fmt.Sprintf("https://github.com/y0geshpatil/sl-dbg/releases/download/v%s/sl-dbg-java-adapter.jar", binaryVersion)
+		stepInfo("java", "downloading pre-built adapter jar from GitHub Releases (%s)", url)
+		if err := downloadFile(url, destPath); err == nil {
+			stepOK("java", "installed %s", destPath)
+			return nil
+		}
+		stepInfo("java", "release download failed; falling back to local Maven build")
+	}
+
+	// Strategy 3: build from in-tree source if we can find the Maven project.
 	src := findJavaLauncherSource()
 	if src == "" {
 		return fmt.Errorf(
@@ -194,6 +209,18 @@ func findJavaLauncherSource() string {
 		}
 	}
 	return ""
+}
+
+// isReleaseVersion reports whether ver looks like a published release (e.g.
+// "1.2.3") rather than a dev build ("0.0.0-dev") or snapshot ("1.2.3-next").
+func isReleaseVersion(ver string) bool {
+	return ver != "" &&
+		ver != "0.0.0-dev" &&
+		!strings.HasPrefix(ver, "v") &&
+		!strings.HasSuffix(ver, "-dev") &&
+		!strings.HasSuffix(ver, "-next") &&
+		!strings.Contains(ver, "-dirty") &&
+		!strings.Contains(ver, "+")
 }
 
 func adapterCacheDir() (string, error) {
