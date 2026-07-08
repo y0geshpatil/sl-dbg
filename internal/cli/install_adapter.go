@@ -25,8 +25,9 @@ func newInstallAdapterCmdImpl() *cobra.Command {
 
   python  →  pip install --user debugpy
   go      →  go install github.com/go-delve/delve/cmd/dlv@latest
-  java    →  build the embedded launcher fat-jar (requires Maven + JDK 11+)
-            and copy it to ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar
+  java    →  downloads pre-built sl-dbg-java-adapter.jar from GitHub Releases
+            into ~/.cache/sl-dbg/adapters/ (no Maven required); falls back to
+            a local Maven build when run from a source checkout.
   all     →  install every adapter for which the prerequisite toolchain
             is available; skip the others with a clear hint.`,
 		Args: cobra.ExactArgs(1),
@@ -158,7 +159,9 @@ func installJava(force bool) error {
 	// buildinfo.Version is injected by goreleaser as the bare semver ("1.2.3"),
 	// without a leading "v". GitHub release tags use the "v" prefix, so we add
 	// it when constructing the download URL.
+	releaseTried := false
 	if binaryVersion := buildinfo.Version; isReleaseVersion(binaryVersion) {
+		releaseTried = true
 		url := fmt.Sprintf("https://github.com/y0geshpatil/sl-dbg/releases/download/v%s/sl-dbg-java-adapter.jar", binaryVersion)
 		stepInfo("java", "downloading pre-built adapter jar from GitHub Releases (%s)", url)
 		if err := downloadFile(url, destPath); err == nil {
@@ -171,12 +174,18 @@ func installJava(force bool) error {
 	// Strategy 3: build from in-tree source if we can find the Maven project.
 	src := findJavaLauncherSource()
 	if src == "" {
+		hint := "  Options:\n" +
+			"    - Set SL_DBG_JAVA_ADAPTER_URL to a direct jar download URL, or\n" +
+			"    - Place sl-dbg-java-adapter.jar manually in ~/.cache/sl-dbg/adapters/"
+		if releaseTried {
+			return fmt.Errorf(
+				"GitHub Release download failed and no local source tree was found.\n" +
+					"  Check your internet connection and try again, or:\n" + hint)
+		}
 		return fmt.Errorf(
-			"no prebuilt jar available and the in-tree Maven project " +
-				"adapters/java-launcher was not found.\n" +
-				"  Either:\n" +
-				"    - run sl-dbg from a source checkout so `make java-adapter` can run, or\n" +
-				"    - set SL_DBG_JAVA_ADAPTER_URL to a downloadable jar URL")
+			"no prebuilt jar available and the in-tree Maven project "+
+				"adapters/java-launcher was not found.\n"+
+				"  Use a released binary (install.sh) so the jar is downloaded automatically, or:\n"+hint)
 	}
 	if _, err := exec.LookPath("mvn"); err != nil {
 		return fmt.Errorf("Maven not found in PATH — install with `brew install maven` " +

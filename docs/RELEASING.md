@@ -36,8 +36,9 @@ sl-dbg (public)                              sl-dbg-site (public)
    git push origin v0.1.0
    ```
 4. `.github/workflows/release.yml` runs GoReleaser, which:
+   - builds the Java adapter fat-jar with `mvn -q -DskipTests package`
    - builds `darwin/amd64`, `darwin/arm64`, `linux/amd64`, `linux/arm64`
-   - uploads tarballs + checksums to the GitHub Release
+   - uploads tarballs + checksums + `sl-dbg-java-adapter.jar` to the GitHub Release
    - publishes a Homebrew formula to the
      `y0geshpatil/homebrew-sl-dbg` tap
 

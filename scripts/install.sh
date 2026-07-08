@@ -120,7 +120,7 @@ Next steps:
   2. Install language adapters you need:
        sl-dbg install-adapter python   # debugpy via pip
        sl-dbg install-adapter go       # dlv via go install
-       sl-dbg install-adapter java     # java-debug via Maven
+       sl-dbg install-adapter java     # downloads pre-built jar automatically (no Maven needed)
 
   3. Register sl-dbg with your AI agent (one-shot, edits the agent's config):
        sl-dbg mcp install claude       # Claude Desktop

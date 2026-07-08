@@ -36,14 +36,18 @@ For attach by PID, the target must be running with debugpy already loaded — ei
 - `python -m debugpy --listen 5678 --wait-for-client app.py`, or
 - In-code: `import debugpy; debugpy.listen(5678); debugpy.wait_for_client()`
 
-### Java — `java-debug` (Microsoft)
-**Adapter:** `java -jar /path/to/java-debug.jar`  
-**Install:** `sl-dbg` auto-downloads `com.microsoft.java.debug.plugin-<ver>.jar` from GitHub releases into `~/.cache/sl-dbg/adapters/java-debug.jar`.  
-**Target requirement:** JDK 8+ on the target.
+### Java — `sl-dbg-java-adapter` (embedded launcher)
+**Adapter:** `java -jar ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar --port {PORT}`  
+**Install:** `sl-dbg install-adapter java` — downloads the pre-built jar from the matching
+GitHub Release automatically. No Maven, no source checkout required.  
+**Target requirement:** JDK 8+ on the machine running the target process.
 
 ```bash
-# Launch
+# Launch a fresh JVM
 sl-dbg start --lang java --main com.example.App --classpath ./build/libs/*
+
+# Stop on entry
+sl-dbg start --lang java --main Foo --classpath . --stop-on-entry
 
 # Attach (target must have JDWP enabled)
 # java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -jar app.jar
@@ -54,6 +58,11 @@ sl-dbg attach --lang java --host prod.svc --port 5005 \
               --source-root ./src/main/java \
               --source-root ./target/generated-sources
 ```
+
+**Jar resolution order:**
+1. `$SL_DBG_JAVA_DEBUG_JAR` env var (override for custom builds)
+2. `~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar` (installed by `install-adapter java`)
+3. `<repo>/adapters/java-launcher/target/sl-dbg-java-adapter.jar` (local dev build)
 
 ### Go — `dlv dap`
 **Adapter:** `dlv dap`  
@@ -101,82 +110,64 @@ sl-dbg start --lang dotnet --program ./bin/Debug/net8.0/MyApp.dll
 sl-dbg attach --lang dotnet --pid 12345
 ```
 
-## Auto-Install Flow
+## Install Flow
 
-On first use of a language, `sl-dbg` runs `detectCommand`. If it fails:
+Run `sl-dbg install-adapter <lang>` (or `sl-dbg install-adapter all`) after installing the binary.
 
-1. Print a one-line consent prompt:
-   ```
-   [sl-dbg] python adapter (debugpy) not found.
-   [sl-dbg] Install? [Y/n]
-   ```
-   Suppressible with `--yes` or config `auto_install = true`.
+### Java
 
-2. Run the install steps (pip/go/curl/etc.).
+`install-adapter java` tries three strategies in order:
 
-3. Cache the resolved adapter path in `~/.config/sl-dbg/adapters.toml`.
+1. **`$SL_DBG_JAVA_ADAPTER_URL`** — if this env var is set, download the jar from that URL directly.
+2. **GitHub Releases auto-download** — when the running binary is a release build, the matching
+   `sl-dbg-java-adapter.jar` is downloaded from `github.com/y0geshpatil/sl-dbg/releases`. This is
+   the normal path for users who installed via `install.sh` or Homebrew (no Maven required).
+3. **Local Maven build** — fallback for source-checkout installs. Finds
+   `adapters/java-launcher/pom.xml` relative to the binary and runs
+   `mvn -q -DskipTests package`. Requires Maven + JDK 11+.
 
-4. Proceed with the original command.
-
-In non-interactive (CI, agent) mode, the absence of a TTY auto-fails with a clear error:
+In non-interactive (CI, agent) mode, if the adapter is missing `sl-dbg` returns:
 ```json
-{"ok":false,"error":{"code":"ADAPTER_NOT_FOUND",
-  "message":"debugpy is not installed",
-  "hint":"Run: pip install --user debugpy, or pass --yes to auto-install"}}
+{"ok":false,"error":{"code":"ADAPTER_FAILED",
+  "message":"adapter \"java\" not installed: ...",
+  "hint":"Run `sl-dbg install-adapter java` to download and install the adapter automatically (no Maven required)."}}
 ```
 
-## Manual Adapter Configuration
+### Python
 
-Override defaults in `~/.config/sl-dbg/adapters.toml`:
+`install-adapter python` runs `python3 -m pip install --user --upgrade debugpy`.
+Requires Python 3.8+ on PATH.
 
-```toml
-[adapters.python]
-command = ["/opt/venv/bin/python", "-m", "debugpy.adapter"]
+### Go
 
-[adapters.java]
-command = ["java", "-jar", "/opt/sl-dbg/java-debug.jar"]
-java_home = "/opt/openjdk-17"
+`install-adapter go` runs `go install github.com/go-delve/delve/cmd/dlv@latest`.
+Requires Go 1.21+ on PATH.
 
-[adapters.go]
-command = ["/usr/local/bin/dlv", "dap"]
+## Manual Override
 
-[adapters.cpp]
-command = ["/opt/llvm/bin/lldb-dap"]
+To point sl-dbg at a custom or vendored jar, set an env var before starting the daemon:
+
+```bash
+export SL_DBG_JAVA_DEBUG_JAR=/path/to/my-java-adapter.jar
+sl-dbg start --lang java --main com.example.App --classpath .
 ```
 
-This lets users pin specific adapter versions or use vendored adapters.
+For python and go, install the adapter version you want by running the respective
+package manager commands (`pip install debugpy==X.Y.Z`, `go install …@vX.Y.Z`) and
+sl-dbg will pick up whatever is on PATH.
 
 ## Adding a New Adapter
 
-To support a new language, add a file to `internal/adapter/<lang>.go`:
-
-```go
-func init() {
-    Register(Adapter{
-        Lang: "ruby",
-        DetectCommand: []string{"gem", "list", "-i", "debug"},
-        LaunchCommand: func(cfg LaunchCfg) []string {
-            return []string{"rdbg", "--open", "--port", "12345", cfg.Program}
-        },
-        InstallSteps: []InstallStep{
-            {Cmd: []string{"gem", "install", "debug"}, Description: "Install debug gem"},
-        },
-        DefaultPort: 12345,
-    })
-}
-```
-
-No core code changes. The adapter is picked up automatically.
+To support a new language, add a file to `internal/adapter/<lang>.go` using the
+`adapter.Spec` struct and register it via `adapter.Register()` in an `init()` function.
+See `internal/adapter/python.go` for the simplest example.
 
 ## Compatibility Matrix
 
 | Adapter | Min version | OSes | Attach by PID | Conditional BP | Logpoints | Reverse step |
 |---|---|---|---|---|---|---|
-| debugpy | 1.6.0 | mac/linux/win | ✅ | ✅ | ✅ | ❌ |
-| java-debug | 0.40+ | all | via JDWP | ✅ | ✅ | ❌ |
-| dlv dap | 1.21+ | all | ✅ | ✅ | ✅ | ❌ |
-| vscode-js-debug | 1.80+ | all | via Node port | ✅ | ✅ | ❌ |
-| lldb-dap | LLVM 17+ | mac/linux | ✅ | ✅ | ✅ | partial |
-| netcoredbg | 3.1+ | all | ✅ | ✅ | ✅ | ❌ |
+| debugpy | 1.6.0 | mac/linux | ✅ | ✅ | ✅ | ❌ |
+| sl-dbg-java-adapter | 0.1.0 | mac/linux | via JDWP | ✅ | ✅ | ❌ |
+| dlv dap | 1.21+ | mac/linux | ✅ | ✅ | ✅ | ❌ |
 
 `sl-dbg adapters` shows the live status on a given machine.

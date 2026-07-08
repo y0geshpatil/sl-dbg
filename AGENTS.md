@@ -38,7 +38,7 @@ pkg/api/                          public Go SDK that wraps the daemon protocol
 test/e2e/                         shell scripts (java.sh, python.sh, go.sh) driven by run-all.sh; the only end-to-end coverage we have
 examples/                         tiny target programs used by e2e
 docs/                             user-facing docs (DESIGN, COMMANDS, AGENT-GUIDE, …)
-adapters/java/                    Maven module that builds the embedded java-debug launcher fat-jar
+adapters/java-launcher/           Maven module that builds the embedded Java DAP launcher fat-jar
 ```
 
 **Where to make changes** depends on the layer:
@@ -70,7 +70,10 @@ go test ./...
 # Full unit + e2e (requires python3 + debugpy + Java JDK on PATH; dlv optional)
 make test
 
-# Build the bundled Java DAP adapter jar (~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar). Slow (~30 s); only needed when adapters/java/ changes.
+# Install the Java DAP adapter jar for local development.
+# For end users: sl-dbg install-adapter java  (downloads jar from GitHub Releases automatically).
+# For source-checkout dev: make java-adapter  (requires Maven + JDK 11+; builds the jar locally).
+# Only needed when adapters/java-launcher/**/*.java changes.
 make java-adapter
 
 # Stop the running daemon (always do this between binary swaps, otherwise the old daemon serves stale code)
@@ -138,7 +141,7 @@ bin/sl-dbg daemon stop
 
 - **Don't run `pkill`, `killall`, or `kill $VAR`** in shell commands — the agent runtime blocks them. Use literal numeric PIDs: `kill 12345`. To stop the daemon, prefer `bin/sl-dbg daemon stop`.
 - **Daemon is sticky.** After rebuilding, the *old* daemon keeps serving until you stop it. `make build` does NOT restart the daemon for you.
-- **Java adapter jar is cached** at `~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar`. Edits to `adapters/java/**/*.java` require `make java-adapter` to take effect.
+- **Java adapter jar is cached** at `~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar`. Edits to `adapters/java-launcher/**/*.java` require `make java-adapter` to take effect.
 - **`parseLocation` distinguishes file paths from class names** by presence of `/`, `\`, or a known source extension. If your change makes `ComplexLoopDebug:14` get prepended with cwd, you've broken Java line breakpoints. There's no test for this — run the live Java e2e (`make test`) to catch it.
 - **`stopOnEntry` works via `WaitForStop(ctx, 5s)`** inside `handleStart`. Don't return the launch response before the entry pause arrives, or callers will see `state="initializing"` and race.
 - **Schemas with `required: ["session"]`** would break the default-session UX. `session` is always optional.
