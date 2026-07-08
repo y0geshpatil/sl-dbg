@@ -52,4 +52,19 @@ jobs:
           export PATH="$(go env GOPATH)/bin:$PATH"
           bash test/e2e/python.sh
           bash test/e2e/go.sh
-          # TODO(#32): add JDK setup and run test/e2e/java.sh once CI time allows.
+
+      - name: Setup Java for e2e
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Run Java e2e smoke test
+        shell: bash
+        run: |
+          # install-adapter java uses Strategy 3 (in-tree Maven build) for dev builds:
+          # Strategy 1 = SL_DBG_JAVA_ADAPTER_URL env var, Strategy 2 = GitHub Releases download
+          # (skipped here because buildinfo.Version == "0.0.0-dev"), Strategy 3 = local Maven.
+          # Maven is pre-installed on ubuntu-latest and macos-latest runners.
+          ./bin/sl-dbg install-adapter java
+          bash test/e2e/java.sh

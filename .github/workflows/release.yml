@@ -20,6 +20,14 @@ jobs:
         with:
           go-version: '1.22'
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+
+      - name: Build Java adapter jar
+        run: cd adapters/java-launcher && mvn -q -DskipTests package
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser

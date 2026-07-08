@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/y0geshpatil/sl-dbg/internal/buildinfo"
 )
 
 // newInstallAdapterCmdImpl returns the real `install-adapter` command.
@@ -24,8 +25,9 @@ func newInstallAdapterCmdImpl() *cobra.Command {
 
   python  →  pip install --user debugpy
   go      →  go install github.com/go-delve/delve/cmd/dlv@latest
-  java    →  build the embedded launcher fat-jar (requires Maven + JDK 11+)
-            and copy it to ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar
+  java    →  downloads pre-built sl-dbg-java-adapter.jar from GitHub Releases
+            into ~/.cache/sl-dbg/adapters/ (no Maven required); falls back to
+            a local Maven build when run from a source checkout.
   all     →  install every adapter for which the prerequisite toolchain
             is available; skip the others with a clear hint.`,
 		Args: cobra.ExactArgs(1),
@@ -149,15 +151,41 @@ func installJava(force bool) error {
 		return downloadFile(url, destPath)
 	}
 
-	// Strategy 2: build from in-tree source if we can find the Maven project.
+	// Strategy 2: auto-download the pre-built jar from the GitHub release that
+	// matches the running binary's version. This is the normal path for users
+	// who installed sl-dbg via the install script or Homebrew and don't have a
+	// source checkout or Maven available.
+	//
+	// buildinfo.Version is injected by goreleaser as the bare semver ("1.2.3"),
+	// without a leading "v". GitHub release tags use the "v" prefix, so we add
+	// it when constructing the download URL.
+	releaseTried := false
+	if binaryVersion := buildinfo.Version; isReleaseVersion(binaryVersion) {
+		releaseTried = true
+		url := fmt.Sprintf("https://github.com/y0geshpatil/sl-dbg/releases/download/v%s/sl-dbg-java-adapter.jar", binaryVersion)
+		stepInfo("java", "downloading pre-built adapter jar from GitHub Releases (%s)", url)
+		if err := downloadFile(url, destPath); err == nil {
+			stepOK("java", "installed %s", destPath)
+			return nil
+		}
+		stepInfo("java", "release download failed; falling back to local Maven build")
+	}
+
+	// Strategy 3: build from in-tree source if we can find the Maven project.
 	src := findJavaLauncherSource()
 	if src == "" {
+		hint := "  Options:\n" +
+			"    - Set SL_DBG_JAVA_ADAPTER_URL to a direct jar download URL, or\n" +
+			"    - Place sl-dbg-java-adapter.jar manually in ~/.cache/sl-dbg/adapters/"
+		if releaseTried {
+			return fmt.Errorf(
+				"GitHub Release download failed and no local source tree was found.\n" +
+					"  Check your internet connection and try again, or:\n" + hint)
+		}
 		return fmt.Errorf(
-			"no prebuilt jar available and the in-tree Maven project " +
-				"adapters/java-launcher was not found.\n" +
-				"  Either:\n" +
-				"    - run sl-dbg from a source checkout so `make java-adapter` can run, or\n" +
-				"    - set SL_DBG_JAVA_ADAPTER_URL to a downloadable jar URL")
+			"no prebuilt jar available and the in-tree Maven project "+
+				"adapters/java-launcher was not found.\n"+
+				"  Use a released binary (install.sh) so the jar is downloaded automatically, or:\n"+hint)
 	}
 	if _, err := exec.LookPath("mvn"); err != nil {
 		return fmt.Errorf("Maven not found in PATH — install with `brew install maven` " +
@@ -194,6 +222,18 @@ func findJavaLauncherSource() string {
 		}
 	}
 	return ""
+}
+
+// isReleaseVersion reports whether ver looks like a published release (e.g.
+// "1.2.3") rather than a dev build ("0.0.0-dev") or snapshot ("1.2.3-next").
+func isReleaseVersion(ver string) bool {
+	return ver != "" &&
+		ver != "0.0.0-dev" &&
+		!strings.HasPrefix(ver, "v") &&
+		!strings.HasSuffix(ver, "-dev") &&
+		!strings.HasSuffix(ver, "-next") &&
+		!strings.Contains(ver, "-dirty") &&
+		!strings.Contains(ver, "+")
 }
 
 func adapterCacheDir() (string, error) {

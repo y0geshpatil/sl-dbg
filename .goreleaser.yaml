@@ -50,6 +50,8 @@ release:
   github:
     owner: y0geshpatil
     name: sl-dbg
+  extra_files:
+    - glob: adapters/java-launcher/target/sl-dbg-java-adapter.jar
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -94,4 +96,4 @@ brews:
       Language adapters are NOT bundled. After install run:
         sl-dbg install-adapter all
       to fetch / build them (debugpy via pip, dlv via go install,
-      Java adapter via Maven build).
+      Java adapter downloaded automatically — no Maven required).

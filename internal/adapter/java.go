@@ -22,7 +22,7 @@ func init() {
 		Detect: func() (string, error) {
 			jar := javaDebugJarPath()
 			if jar == "" {
-				return "", fmt.Errorf("sl-dbg java adapter jar not found; build it with `make java-adapter` or set SL_DBG_JAVA_DEBUG_JAR")
+				return "", fmt.Errorf("sl-dbg java adapter jar not found — run `sl-dbg install-adapter java` to install it")
 			}
 			if _, err := exec.LookPath("java"); err != nil {
 				return "", fmt.Errorf("`java` not in PATH")
@@ -96,9 +96,8 @@ func init() {
 			}
 			return args, nil
 		},
-		InstallHint: "Build the embedded launcher with `make java-adapter` (requires Maven + JDK 11+), " +
-			"or download a prebuilt sl-dbg-java-adapter.jar into ~/.cache/sl-dbg/adapters/. " +
-			"Override location with SL_DBG_JAVA_DEBUG_JAR.",
+		InstallHint: "Run `sl-dbg install-adapter java` to download and install the adapter automatically (no Maven required). " +
+			"Override the jar location with SL_DBG_JAVA_DEBUG_JAR.",
 	})
 }
 
