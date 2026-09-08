@@ -30,7 +30,7 @@ e2e_cleanup() {
   local status=$?
   trap - EXIT
   cd "$E2E_ROOT" || exit "$status"
-  # daemon stop auto-starts a daemon when none exists, so guard the call.
+  # Keep this guard for compatibility when testing an older installed binary.
   if [[ -S "$SL_DBG_SOCKET" ]]; then
     "$SLDBG" daemon stop >/dev/null 2>&1 || true
     local attempt

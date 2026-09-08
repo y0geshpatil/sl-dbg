@@ -53,7 +53,7 @@ sl-dbg start --lang java --main com.example.App --classpath ./build/libs/*
 sl-dbg start --lang java --main Foo --classpath . --stop-on-entry
 
 # Attach (target must have JDWP enabled)
-# java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=*:5005 -jar app.jar
+# java -agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=127.0.0.1:5005 -jar app.jar
 sl-dbg attach --lang java --host localhost --port 5005
 
 # Source mapping for remote targets
@@ -134,7 +134,7 @@ matched to the binary; without `--force`, a valid older cached jar is retained.
    **`$SL_DBG_JAVA_ADAPTER_SHA256`** to contain the expected 64-character hex digest.
 2. **GitHub Releases auto-download** — when the running binary is a release build, the matching
    `sl-dbg-java-adapter.jar` is downloaded from `github.com/y0geshpatil/sl-dbg/releases`. This is
-   the normal path for users who installed via `install.sh` or Homebrew (no Maven required).
+   the normal path for users who installed a complete release via `install.sh` (no Maven required).
    Both the jar and `sl-dbg-java-adapter.jar.sha256` sidecar are fetched from the **same version tag**.
    Missing or invalid checksums fail closed, including older releases without a sidecar.
    A failed release download preserves its underlying error and never silently substitutes a local build.

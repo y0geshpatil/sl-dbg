@@ -31,6 +31,9 @@ fi
 
 source "$SCRIPT_DIR/common.sh"
 e2e_isolate
+STOP_OUT=$("$SLDBG" daemon stop)
+echo "$STOP_OUT" | grep -q '"shutdown":"not running"'
+[[ ! -S "$SL_DBG_SOCKET" ]]
 export PYTHONPATH="$DEBUGPY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
 export SL_DBG_E2E_MARKER="$E2E_ROOT/read-only-side-effect"
 

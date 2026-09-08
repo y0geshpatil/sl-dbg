@@ -41,7 +41,7 @@ If you're wiring sl-dbg into an LLM via function calling, expose these tools:
       "lang": {"type":"string","enum":["python","java","go"]},
       "program": {"type":"string"},
       "args": {"type":"array","items":{"type":"string"}},
-      "stop_on_entry": {"type":"boolean"},
+      "stopOnEntry": {"type":"boolean"},
       "name": {"type":"string","description":"optional human-friendly id for the new session (must be unique within the daemon); auto-generated if omitted"}
     },
     "required": ["lang","program"]
@@ -76,6 +76,12 @@ to preview or `sl-dbg mcp install --print` for manual configuration.
 VS Code uses the workspace `.vscode/mcp.json` `servers` object; Copilot CLI uses
 `~/.copilot/mcp-config.json` `mcpServers`. Other client-specific locations are
 printed by the command.
+
+For launching a Python script, explicitly allow the target path:
+`sl-dbg mcp install vscode --allow-program "$PWD/demo.py"`.
+`--allow-program` matches the target's `program`, not its interpreter. The
+default PATH-discovered `python3` entry does not permit arbitrary `.py` files;
+`PROGRAM_NOT_ALLOWED` means the requested target needs an explicit allowance.
 
 Registrations use an absolute executable path and safe mode. Restart clients after
 registration; after moving the binary, repeat installation with `--force`. Backups

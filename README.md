@@ -129,7 +129,7 @@ sl-dbg locals
 ### Use from an AI agent
 ```bash
 # Register sl-dbg with your agent (one of: claude|cursor|vscode|codex|copilot|all)
-sl-dbg mcp install claude
+sl-dbg mcp install claude --allow-program "$PWD/demo.py"
 
 # Or print the JSON/TOML snippet to paste yourself
 sl-dbg mcp install --print
@@ -138,7 +138,7 @@ sl-dbg mcp install --print
 # A bare `sl-dbg mcp` is secure-by-default (issue #70): auto-discovers java,
 # python3, node, dlv on PATH and jails the source reader at cwd. Pass
 # --allow-program explicitly to override the auto-discovered allowlist.
-sl-dbg mcp --safe --allow-program java --allow-program python3
+sl-dbg mcp --safe --allow-program "$PWD/demo.py"
 ```
 `sl-dbg mcp install` does a safe read-merge-write with a timestamped `.bak`
 backup. It refuses to overwrite an existing entry unless `--force` is passed,
@@ -146,8 +146,9 @@ and `--dry-run` shows the diff without touching disk.
 
 The registered command runs `sl-dbg mcp --safe` by default — secure-by-default
 mode (source jail on, eval off, session cap on, audit log on). The program
-allowlist is auto-discovered from PATH (java, python3, node, dlv), so common
-debugging workflows just work. To restrict which binaries the agent may launch
+allowlist is auto-discovered from PATH (java, python3, node, dlv). Program rules
+match the target path, not the interpreter: `python3` alone does not authorize
+an arbitrary Python script. To permit the target the agent may launch
 via `debug_start`, pass `--allow-program /path/to/your/program` (repeatable).
 Pass `--read-only` to register the server with every mutating tool hidden,
 or `--insecure` to fall back to the legacy permissive mode (not recommended).
@@ -157,6 +158,7 @@ or `--insecure` to fall back to the legacy permissive mode (not recommended).
 Rerun the installer to upgrade atomically. Existing daemons and MCP clients keep
 using old code: finish debug sessions, run `sl-dbg daemon stop`, then restart the
 MCP client. Installation never interrupts active sessions.
+`daemon stop` waits for shutdown and is a no-op when no daemon is running.
 
 For older `/usr/local/bin` installations, either set `INSTALL_DIR=/usr/local/bin`
 and run as its owner, or put `~/.local/bin` **before** `/usr/local/bin` in PATH.

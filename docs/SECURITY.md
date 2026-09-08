@@ -46,7 +46,7 @@ an audit log. Configure it explicitly for a project:
 
 ```bash
 sl-dbg mcp --safe \
-  --allow-program python3 \
+  --allow-program "$HOME/work/project/app.py" \
   --allow-source-root "$HOME/work/project" \
   --max-sessions 4 \
   --audit-log "$HOME/.local/state/sl-dbg/audit.log"
@@ -61,7 +61,10 @@ sl-dbg mcp --safe \
 | `--allow-eval` | `SL_DBG_ALLOW_EVAL` | `0` (disabled) |
 
 The discovery list is not a promise of language support: supported adapters are
-Python, Go, and Java. Add `--read-only` to hide mutating tools from MCP as well.
+Python, Go, and Java. Program rules match the target path, not its interpreter;
+an auto-discovered `python3` entry does not authorize arbitrary Python scripts.
+Explicitly allow trusted target paths before launching them through MCP.
+Add `--read-only` to hide mutating tools from MCP as well.
 Opting into `--allow-eval` grants shell-equivalent capabilities in many targets.
 Do not enable it merely to solve installation or runtime detection problems.
 

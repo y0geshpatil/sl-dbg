@@ -30,8 +30,12 @@ environment; Go installs Delve; released Java binaries download the same-version
 JAR and mandatory SHA-256 sidecar. `--force` refreshes an existing adapter.
 See [ADAPTERS.md](ADAPTERS.md) for prerequisite/runtime detection and cache paths.
 
-### `sl-dbg daemon [start|stop|status|logs]`
-Direct daemon control. Normally implicit.
+### `sl-dbg daemon [serve|stop|status|logs]`
+Direct daemon control. Normally implicit. `stop` never starts an absent daemon.
+It waits up to five seconds for the acknowledged daemon to release its endpoint
+and exit before returning; failure is actionable, not silently ignored. A
+replacement daemon's endpoint/PID is left alone. If already stopped, the response
+data is `{"shutdown":"not running"}`.
 
 ### `sl-dbg mcp`
 Run the MCP server over stdio. `tools/list` is the authoritative schema for the
