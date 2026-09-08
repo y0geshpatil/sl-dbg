@@ -5,16 +5,16 @@ Thanks for your interest in `sl-dbg`. This document covers development setup, co
 ## Development Setup
 
 ### Prerequisites
-- Go 1.22+ (`brew install go`)
+- Go 1.26.4 (the CI/release toolchain; language minimum is 1.22)
 - One or more DAP adapters for integration testing:
-  - `pip install debugpy` (Python — easiest)
+  - `./bin/sl-dbg install-adapter python` (requires Python and `venv`)
   - `go install github.com/go-delve/delve/cmd/dlv@latest`
 - `make`, `git`
 - Optional: `golangci-lint`, `goreleaser`
 
 ### Build
 ```bash
-git clone https://github.com/<owner>/sl-dbg
+git clone https://github.com/y0geshpatil/sl-dbg
 cd sl-dbg
 make build
 ./bin/sl-dbg version
@@ -22,10 +22,15 @@ make build
 
 ### Run Tests
 ```bash
-make test               # unit tests
-make test-integration   # integration (needs adapters)
+make test-unit          # Go unit tests, including offline installer fixtures
+make test-e2e           # real adapters; missing prerequisites are reported as skips
 make lint
 ```
+
+E2E tests use isolated daemon sockets and temporary target files. They must never
+stop your normal debugging daemon. A skipped adapter suite is not coverage for
+that language. Java requires JDK 11+ and `make java-adapter` (Maven); the installer
+can then use that source build in a development checkout.
 
 ### Common Tasks
 ```bash
@@ -46,8 +51,8 @@ sl-dbg/
 │   ├── dap/                # DAP client wrapper
 │   ├── session/            # session manager
 │   ├── adapter/            # per-language adapter registry
-│   ├── ipc/                # Unix socket / named pipe transport
-│   ├── config/             # config file loader
+│   ├── ipc/                # Unix socket transport
+│   ├── config/             # planned config loader (scaffold)
 │   ├── logging/            # structured logging
 │   └── buildinfo/          # version metadata
 ├── pkg/api/                # public JSON types
@@ -55,7 +60,7 @@ sl-dbg/
 ├── examples/               # sample programs to debug
 ├── test/                   # integration + e2e tests
 ├── scripts/                # release/install scripts
-└── adapters/               # (future) bundled adapter binaries
+└── adapters/java-launcher/ # standalone Java DAP launcher Maven project
 ```
 
 ## Code Style
@@ -113,7 +118,7 @@ The PR template enforces this with a checkbox list; AGENTS.md §4 rule 12 spells
 ## Testing Philosophy
 
 - **Unit tests** in `internal/<pkg>/*_test.go` — pure logic, no subprocesses.
-- **Integration tests** in `test/integration/` — drive a real adapter. Gated by `-tags=integration`.
+- **Installer tests** in `scripts/` — offline release fixtures and temporary install directories.
 - **End-to-end tests** in `test/e2e/` — spawn `bin/sl-dbg` as a subprocess and assert JSON output. Treat sl-dbg as a black box.
 
 Every new command MUST have:
@@ -125,8 +130,8 @@ Every new command MUST have:
 
 1. Create `internal/cli/<command>.go` with the cobra `*cobra.Command`.
 2. Register in `internal/cli/root.go`.
-3. Add IPC request/response types to `pkg/api/`.
-4. Add daemon handler in `internal/daemon/handlers.go`.
+3. Add wire request/response types to `internal/proto/`; expose SDK helpers in `pkg/api/`.
+4. Add a daemon handler and register it in `internal/daemon/server.go`.
 5. Document in `docs/COMMANDS.md`.
 6. Add tests.
 

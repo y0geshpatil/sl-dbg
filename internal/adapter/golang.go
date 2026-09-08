@@ -1,11 +1,41 @@
 package adapter
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 )
+
+// GoBinDir includes settings persisted with `go env -w`, not just shell exports.
+func GoBinDir() string {
+	if bin := os.Getenv("GOBIN"); bin != "" {
+		return bin
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "go", "env", "-json", "GOBIN", "GOPATH").Output()
+	var env struct{ GOBIN, GOPATH string }
+	if err == nil && json.Unmarshal(out, &env) == nil {
+		if env.GOBIN != "" {
+			return env.GOBIN
+		}
+		if paths := filepath.SplitList(env.GOPATH); len(paths) > 0 {
+			return filepath.Join(paths[0], "bin")
+		}
+	}
+	if paths := filepath.SplitList(os.Getenv("GOPATH")); len(paths) > 0 {
+		return filepath.Join(paths[0], "bin")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, "go", "bin")
+}
 
 // goInstallDirs returns the candidate directories where `go install` may have
 // placed binaries: $GOBIN, then each $GOPATH/bin, then ~/go/bin as the
@@ -13,6 +43,9 @@ import (
 // PATH-vs-GOPATH/bin mismatch in #44.
 func goInstallDirs() []string {
 	var dirs []string
+	if dir := GoBinDir(); dir != "" {
+		dirs = append(dirs, dir)
+	}
 	if v := os.Getenv("GOBIN"); v != "" {
 		dirs = append(dirs, v)
 	}
@@ -27,46 +60,33 @@ func goInstallDirs() []string {
 	return dirs
 }
 
+func DelvePath() (string, error) {
+	if p, err := exec.LookPath("dlv"); err == nil {
+		return p, nil
+	}
+	for _, dir := range goInstallDirs() {
+		if !filepath.IsAbs(dir) {
+			continue
+		}
+		if p, err := exec.LookPath(filepath.Join(dir, "dlv")); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("executable dlv not found in PATH or Go install directories; run `sl-dbg install-adapter go`")
+}
+
 // Go adapter: wraps `dlv dap` (Delve).
 //
-// Delve speaks DAP natively via `dlv dap`. By default it listens on a TCP
-// port; with `--client-addr=stdio` it speaks over stdio. We prefer stdio
-// to match the rest of sl-dbg's adapter handling.
+// Delve speaks DAP over TCP via `dlv dap`.
 //
 // Install: `go install github.com/go-delve/delve/cmd/dlv@latest`
 func init() {
 	Register(Spec{
 		Lang:      "go",
 		AdapterID: "go",
-		Detect: func() (string, error) {
-			// Issue #44: `go install` writes binaries to $GOBIN, $GOPATH/bin,
-			// or ~/go/bin. Those locations aren't always on PATH (especially
-			// in newer Go installs where users rely on `go run`). Fall back
-			// to the standard install dirs so `install-adapter go` and
-			// `adapters` agree.
-			if p, err := exec.LookPath("dlv"); err == nil {
-				return p, nil
-			}
-			for _, dir := range goInstallDirs() {
-				cand := filepath.Join(dir, "dlv")
-				if fi, err := os.Stat(cand); err == nil && !fi.IsDir() {
-					return cand, nil
-				}
-			}
-			return "", fmt.Errorf("dlv not found in PATH or in $GOBIN / $GOPATH/bin / ~/go/bin")
-		},
+		Detect:    DelvePath,
 		LaunchAdapter: func() ([]string, Transport, error) {
-			p, err := exec.LookPath("dlv")
-			if err != nil {
-				for _, dir := range goInstallDirs() {
-					cand := filepath.Join(dir, "dlv")
-					if fi, statErr := os.Stat(cand); statErr == nil && !fi.IsDir() {
-						p = cand
-						err = nil
-						break
-					}
-				}
-			}
+			p, err := DelvePath()
 			if err != nil {
 				return nil, TransportStdio, err
 			}

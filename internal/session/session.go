@@ -93,9 +93,9 @@ type Session struct {
 	evlog   []LoggedEvent
 
 	// Watch expressions (re-evaluated on snapshot or on `watch list`).
-	watchMu      sync.Mutex
-	watches      []*Watch
-	watchNextID  int
+	watchMu     sync.Mutex
+	watches     []*Watch
+	watchNextID int
 
 	// Active exception breakpoint filters (replayed on restart).
 	excFilters []string
@@ -150,14 +150,14 @@ type BP struct {
 }
 
 type stopEvent struct {
-	reason   string
-	threadID int
-	location *proto.Loc
-	hitBP    int
-	exited   *int
+	reason     string
+	threadID   int
+	location   *proto.Loc
+	hitBP      int
+	exited     *int
 	terminated bool
-	signal   string
-	message  string
+	signal     string
+	message    string
 }
 
 // newID returns a short hex id.
@@ -455,17 +455,18 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 
 // EnsureConfigurationDone sends DAP configurationDone exactly once, just before
 // the first user-issued command that resumes execution. Safe to call repeatedly.
-func (s *Session) EnsureConfigurationDone(ctx context.Context) error {
+// The result reports whether this call sent the request.
+func (s *Session) EnsureConfigurationDone(ctx context.Context) (bool, error) {
 	s.configDoneMu.Lock()
 	defer s.configDoneMu.Unlock()
 	if !s.pendingConfigDone {
-		return nil
+		return false, nil
 	}
 	if err := s.cli.ConfigurationDone(ctx); err != nil {
-		return fmt.Errorf("dap configurationDone: %w", err)
+		return false, fmt.Errorf("dap configurationDone: %w", err)
 	}
 	s.pendingConfigDone = false
-	return nil
+	return true, nil
 }
 
 // startAdapter spawns the adapter subprocess and returns a Session shell.
@@ -620,8 +621,8 @@ func (s *Session) watchAdapterExit() {
 	ecCopy := exitCode
 	s.exitCode = &ecCopy
 	s.lastTerminal = &stopEvent{reason: reason, terminated: true, exited: &ecCopy, signal: signalName}
-	s.mu.Unlock()
 	s.notifyWaiters(stopEvent{reason: reason, terminated: true, exited: &ecCopy, signal: signalName})
+	s.mu.Unlock()
 }
 
 func pickFreePort() (int, error) {
@@ -741,15 +742,15 @@ func (s *Session) handleEvent(msg godap.Message) {
 				}
 			}
 		}
-		s.mu.Unlock()
-		if len(toRemove) > 0 {
-			go s.clearOnceBPs(toRemove)
-		}
 		s.notifyWaiters(stopEvent{
 			reason:   ev.Body.Reason,
 			threadID: ev.Body.ThreadId,
 			hitBP:    s.lastHitBP,
 		})
+		s.mu.Unlock()
+		if len(toRemove) > 0 {
+			go s.clearOnceBPs(toRemove)
+		}
 
 	case *godap.ContinuedEvent:
 		s.mu.Lock()
@@ -763,8 +764,8 @@ func (s *Session) handleEvent(msg godap.Message) {
 		s.exitCode = &ec
 		ecCopy := ec
 		s.lastTerminal = &stopEvent{reason: "exited", exited: &ecCopy}
-		s.mu.Unlock()
 		s.notifyWaiters(stopEvent{reason: "exited", exited: &ec})
+		s.mu.Unlock()
 
 	case *godap.TerminatedEvent:
 		s.mu.Lock()
@@ -775,24 +776,35 @@ func (s *Session) handleEvent(msg godap.Message) {
 		if s.lastTerminal == nil {
 			s.lastTerminal = &stopEvent{reason: "terminated", terminated: true}
 		}
-		s.mu.Unlock()
 		s.notifyWaiters(stopEvent{reason: "terminated", terminated: true})
+		s.mu.Unlock()
 	}
 }
 
 // installWaiter registers a one-shot waiter for the next stop/exit/terminate event.
 func (s *Session) installWaiter() chan stopEvent {
+	return s.installStateWaiter(false)
+}
+
+func (s *Session) installStateWaiter(replayPause bool) chan stopEvent {
 	ch := make(chan stopEvent, 1)
 	// If the session has already terminated, satisfy this waiter immediately
 	// so listeners that arrived late still get the correct answer.
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.lastTerminal != nil {
 		ev := *s.lastTerminal
-		s.mu.Unlock()
 		ch <- ev
 		return ch
 	}
-	s.mu.Unlock()
+	if replayPause && s.state == StatePaused {
+		ch <- stopEvent{
+			reason: s.lastPauseReason, threadID: s.currentThread,
+			location: s.lastLocation, hitBP: s.lastHitBP,
+		}
+		return ch
+	}
+	// Hold the state lock through registration so an event cannot land between them.
 	s.waitersMu.Lock()
 	s.waiters = append(s.waiters, ch)
 	s.waitersMu.Unlock()
@@ -800,6 +812,7 @@ func (s *Session) installWaiter() chan stopEvent {
 }
 
 func (s *Session) notifyWaiters(ev stopEvent) {
+	// Called with mu held: replay must not expose a stop before its delivery finishes.
 	s.waitersMu.Lock()
 	w := s.waiters
 	s.waiters = nil
@@ -952,7 +965,17 @@ func (w StopWaiter) Wait(ctx context.Context, timeout time.Duration) (proto.Paus
 
 // WaitForStop blocks until the session pauses again, exits, or timeout fires.
 func (s *Session) WaitForStop(ctx context.Context, timeout time.Duration) (proto.PauseInfo, error) {
-	ch := s.installWaiter()
+	ch := s.installStateWaiter(true)
+	defer func() {
+		s.waitersMu.Lock()
+		defer s.waitersMu.Unlock()
+		for i, waiter := range s.waiters {
+			if waiter == ch {
+				s.waiters = append(s.waiters[:i], s.waiters[i+1:]...)
+				break
+			}
+		}
+	}()
 	var t <-chan time.Time
 	if timeout > 0 {
 		tm := time.NewTimer(timeout)
@@ -962,10 +985,11 @@ func (s *Session) WaitForStop(ctx context.Context, timeout time.Duration) (proto
 	select {
 	case ev := <-ch:
 		pi := proto.PauseInfo{
-			Reason: ev.reason,
-			Thread: ev.threadID,
-			HitBP:  ev.hitBP,
-			Signal: ev.signal,
+			Reason:   ev.reason,
+			Thread:   ev.threadID,
+			HitBP:    ev.hitBP,
+			Signal:   ev.signal,
+			Location: ev.location,
 		}
 		if ev.exited != nil {
 			pi.State = string(StateExited)
@@ -1222,6 +1246,18 @@ func (s *Session) FuncBPs() []FuncBP {
 	out := make([]FuncBP, len(s.funcBPs))
 	copy(out, s.funcBPs)
 	return out
+}
+
+func (s *Session) UpdateFuncBP(localID, dapID int, verified bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.funcBPs {
+		if s.funcBPs[i].LocalID == localID {
+			s.funcBPs[i].DAPID = dapID
+			s.funcBPs[i].Verified = verified
+			return
+		}
+	}
 }
 
 func (s *Session) RemoveFuncBPByID(id int) bool {

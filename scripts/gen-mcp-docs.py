@@ -7,10 +7,15 @@ Usage:
 from __future__ import annotations
 
 import json
+import io
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from datetime import datetime, timezone
+from contextlib import redirect_stdout
+from pathlib import Path
 
 
 def fetch_tools(binary: str) -> dict:
@@ -24,29 +29,95 @@ def fetch_tools(binary: str) -> dict:
     list_res = {"jsonrpc": "2.0", "id": 3, "method": "resources/list", "params": {}}
     list_prm = {"jsonrpc": "2.0", "id": 4, "method": "prompts/list", "params": {}}
     payload = "\n".join(json.dumps(m) for m in (init, initd, list_tools, list_res, list_prm)) + "\n"
-    proc = subprocess.run([binary, "mcp", "--safe", "--allow-program", "*", "--allow-eval"],
-                          input=payload, text=True,
-                          capture_output=True, timeout=10)
+    binary = str(Path(shutil.which(binary) or binary).resolve())
+    # Introspection persists safe-mode policy; never inherit a user's state or socket.
+    with tempfile.TemporaryDirectory(prefix=".mcp-docs-", dir=Path.cwd()) as scratch:
+        root = Path(scratch).resolve()
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith(("SL_DBG_", "XDG_"))}
+        for key, subdir in {
+            "HOME": "home", "XDG_CONFIG_HOME": "config", "XDG_STATE_HOME": "state",
+            "XDG_CACHE_HOME": "cache", "XDG_DATA_HOME": "data",
+            "XDG_RUNTIME_DIR": "run", "TMPDIR": "temp", "TMP": "temp", "TEMP": "temp",
+        }.items():
+            path = root / subdir
+            path.mkdir(mode=0o700, exist_ok=True)
+            env[key] = str(path)
+        # Relative socket names avoid macOS's short sockaddr_un path limit.
+        env["SL_DBG_SOCKET"] = "daemon.sock"
+        try:
+            proc = subprocess.run(
+                [binary, "mcp", "--safe", "--allow-program", "*", "--allow-eval"],
+                input=payload, text=True, cwd=root, env=env,
+                capture_output=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(f"cannot introspect {binary}: {exc}") from exc
+    if proc.returncode != 0:
+        raise RuntimeError(f"{binary} mcp exited with status {proc.returncode}: "
+                           f"{proc.stderr.strip()[-2000:] or '(no stderr)'}")
     out = {"tools": [], "resources": [], "prompts": [], "server": {}}
-    for line in proc.stdout.splitlines():
+    responses = {}
+    for number, line in enumerate(proc.stdout.splitlines(), 1):
         line = line.strip()
         if not line:
             continue
         try:
             msg = json.loads(line)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"MCP stdout line {number} is not JSON: {exc}") from exc
+        if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0":
+            raise RuntimeError(f"MCP stdout line {number} is not a JSON-RPC 2.0 object")
+        if "id" not in msg and isinstance(msg.get("method"), str):
             continue
-        if "result" not in msg:
-            continue
-        r = msg["result"]
-        if msg.get("id") == 1:
-            out["server"] = r.get("serverInfo", {})
-        elif msg.get("id") == 2:
-            out["tools"] = r.get("tools", [])
-        elif msg.get("id") == 3:
-            out["resources"] = r.get("resources", [])
-        elif msg.get("id") == 4:
-            out["prompts"] = r.get("prompts", [])
+        ident = msg.get("id")
+        if type(ident) is not int or ident not in (1, 2, 3, 4) or ident in responses:
+            raise RuntimeError(f"MCP stdout line {number} has an unexpected or duplicate response id")
+        if "error" in msg:
+            raise RuntimeError(f"MCP request {ident} failed: {json.dumps(msg['error'])}")
+        if not isinstance(msg.get("result"), dict):
+            raise RuntimeError(f"MCP request {ident} has no object result")
+        responses[ident] = msg["result"]
+    for ident, method in ((1, "initialize"), (2, "tools/list"),
+                          (3, "resources/list"), (4, "prompts/list")):
+        if ident not in responses:
+            raise RuntimeError(f"MCP response missing for {method}; stderr: "
+                               f"{proc.stderr.strip()[-2000:] or '(none)'}")
+    server = responses[1].get("serverInfo")
+    if (not isinstance(server, dict) or not isinstance(server.get("name"), str)
+            or not isinstance(server.get("version"), str)
+            or not isinstance(responses[1].get("protocolVersion"), str)):
+        raise RuntimeError("MCP initialize response has invalid serverInfo/protocolVersion")
+    out["server"] = server
+    out["protocolVersion"] = responses[1]["protocolVersion"]
+    for ident, key in ((2, "tools"), (3, "resources"), (4, "prompts")):
+        items = responses[ident].get(key)
+        if not isinstance(items, list) or (key == "tools" and not items):
+            raise RuntimeError(f"MCP {key}/list must return a {'nonempty ' if key == 'tools' else ''}{key} array")
+        names = set()
+        for item in items:
+            if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"]:
+                raise RuntimeError(f"MCP {key}/list entry has no valid name")
+            if item["name"] in names:
+                raise RuntimeError(f"MCP {key}/list contains duplicate name {item['name']}")
+            names.add(item["name"])
+            if "description" in item and not isinstance(item["description"], str):
+                raise RuntimeError(f"MCP {key}/list entry has an invalid description")
+            if key == "resources" and not isinstance(item.get("uri"), str):
+                raise RuntimeError(f"MCP resource {item['name']} has no valid uri")
+            if key == "prompts":
+                arguments = item.get("arguments", [])
+                if not isinstance(arguments, list) or any(
+                        not isinstance(arg, dict) or not isinstance(arg.get("name"), str)
+                        for arg in arguments):
+                    raise RuntimeError(f"MCP prompt {item['name']} has invalid arguments")
+            if key == "tools":
+                schema = item.get("inputSchema")
+                if not isinstance(schema, dict) or schema.get("type") != "object":
+                    raise RuntimeError(f"MCP tool {item['name']} has invalid inputSchema")
+                props = schema.get("properties", {})
+                if not isinstance(props, dict) or any(not isinstance(v, dict) for v in props.values()):
+                    raise RuntimeError(f"MCP tool {item['name']} has invalid schema properties")
+        out[key] = items
     return out
 
 
@@ -93,7 +164,19 @@ def categorise(name: str) -> str:
 
 def main() -> int:
     binary = sys.argv[1] if len(sys.argv) > 1 else shutil.which("sl-dbg") or "sl-dbg"
-    data = fetch_tools(binary)
+    try:
+        data = fetch_tools(binary)
+        rendered = io.StringIO()
+        with redirect_stdout(rendered):
+            render_docs(data)
+    except (RuntimeError, OSError, TypeError, ValueError, KeyError, AttributeError) as exc:
+        print(f"gen-mcp-docs: {exc}", file=sys.stderr)
+        return 1
+    sys.stdout.write(rendered.getvalue())
+    return 0
+
+
+def render_docs(data: dict) -> None:
     tools = data["tools"]
     server = data["server"]
     resources = data["resources"]
@@ -109,6 +192,10 @@ def main() -> int:
     p = print
     p("# sl-dbg MCP server reference")
     p("")
+    p("> **Schema profile: eval-enabled** (`--safe --allow-program '*' --allow-eval`). "
+      "Generation explicitly enables evaluation; this is not the default MCP configuration. "
+      "Default safe mode still advertises evaluation tools but rejects their execution.")
+    p("")
     p(f"Auto-generated from a live `sl-dbg mcp` introspection on **{ts}** "
       f"(server `{server.get('name','sl-dbg')}` v`{server.get('version','dev')}`).")
     p("")
@@ -123,7 +210,7 @@ def main() -> int:
     p(f"- **Resources:** {len(resources)}  ")
     p(f"- **Prompts:** {len(prompts)}  ")
     p("- **Transport:** stdio (JSON-RPC 2.0)")
-    p("- **Protocol version:** `2024-11-05`")
+    p(f"- **Protocol version:** `{data['protocolVersion']}`")
     p("")
     p("## Wire it up")
     p("")
@@ -197,7 +284,6 @@ def main() -> int:
     p("")
     p("See [SECURITY.md](SECURITY.md) for the full threat model and the "
       "policy decision flow.")
-    return 0
 
 
 if __name__ == "__main__":

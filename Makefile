@@ -79,9 +79,11 @@ setup: build
 ## java-adapter: Build the embedded Java DAP launcher fat-jar (requires Maven + JDK 11+)
 java-adapter:
 	cd adapters/java-launcher && mvn -q -DskipTests package
+	cd adapters/java-launcher/target && shasum -a 256 sl-dbg-java-adapter.jar > sl-dbg-java-adapter.jar.sha256
 	@echo "✓ Built adapters/java-launcher/target/sl-dbg-java-adapter.jar"
 
-## docs-mcp: Regenerate ../sl-dbg-site/docs/mcp.md from a live binary
+MCP_DOCS_OUT ?= $(BUILD_DIR)/mcp.md
+## docs-mcp: Generate MCP reference locally (override MCP_DOCS_OUT for another destination)
 docs-mcp: build
-	python3 scripts/gen-mcp-docs.py ./$(BUILD_DIR)/$(BINARY) > ../sl-dbg-site/docs/mcp.md
-	@echo "✓ Wrote ../sl-dbg-site/docs/mcp.md"
+	python3 scripts/gen-mcp-docs.py ./$(BUILD_DIR)/$(BINARY) > "$(MCP_DOCS_OUT)"
+	@echo "✓ Wrote $(MCP_DOCS_OUT)"

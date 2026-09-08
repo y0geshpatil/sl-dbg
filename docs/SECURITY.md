@@ -1,228 +1,105 @@
-# sl-dbg — Security Considerations
+# Security considerations
 
-A debugger is a **god-mode tool**: it can read all memory, modify any variable, and execute arbitrary code in the target. `sl-dbg` inherits this power. This document explains the threat model and safe-use guidelines.
+A debugger can read runtime secrets, alter execution, and execute target code.
+`sl-dbg` is a local, per-user debugger, not a sandbox or multi-tenant service.
+Only debug programs and install adapters you trust.
 
-## Threat Model
-
-| Attacker | Capability we must defend against |
-|---|---|
-| Local unprivileged user | Reading another user's sl-dbg socket → debugging their processes |
-| Compromised AI agent / prompt injection | Agent receives malicious instruction "delete user data via eval" |
-| Hostile target process | Target manipulates debugger via crafted DAP responses (adapter bugs) |
-| Network attacker | If user opens JDWP/CDP port to internet → RCE |
-
-## Defenses
-
-### 1. Daemon Socket Permissions
-- Unix socket created with mode `0600`, owned by the user.
-- Path under `$XDG_RUNTIME_DIR` (per-user tmpfs on Linux); fallback `/tmp/sl-dbg-$UID.sock` with strict permissions.
-- Windows named pipe ACL restricted to current user SID.
-
-### 2. No Inbound Network by Default
-- Daemon does NOT listen on TCP. Period.
-- All remote debugging is via **outbound** connections (`sl-dbg` → remote port).
-- Users opening JDWP/debugpy ports to networks is **their** responsibility — but we document SSH tunneling prominently.
-
-### 3. `--read-only` Mode
-Forbids state-mutating operations:
-- `setVariable`, `setExpression`
-- `evaluate` — all eval is rejected with `READ_ONLY_MODE` (issue #56). The DAP `context: "watch"` hint is purely advisory; expression-form eval in every supported language permits arbitrary side effects (process spawn, file I/O, network).
-- `goto` (changes flow)
-- Memory writes
-- Any logpoint that contains shell-injectable syntax
-
-Activate per-session:
-```bash
-sl-dbg attach --lang java --host prod.svc --port 5005 --read-only
-```
-
-Or globally via config:
-```toml
-[security]
-default_read_only = true
-```
-
-### 4. File Allowlist / Denylist
-Restrict which source paths can have breakpoints set. Useful when an AI agent might be misled by a prompt-injected source comment.
-
-```bash
-sl-dbg start --lang python --program app.py \
-  --allowlist-files "src/**/*.py" \
-  --denylist-files "src/secrets/**"
-```
-
-Config:
-```toml
-[security]
-allowlist_files = ["src/**/*.py", "tests/**/*.py"]
-denylist_files = ["**/secrets/**", "**/.env*"]
-```
-
-Any `break <path>:line` outside allowlist returns `BREAKPOINT_DENIED`.
-
-### 5. Eval Sandboxing (Best Effort)
-Eval cannot be safely sandboxed — DAP `evaluate` runs in the target's full interpreter context. We can only:
-- Refuse eval entirely in `--read-only` (recommended for production).
-- Limit eval result size to prevent memory exhaustion (default: 1 MB).
-- Truncate logpoint output (default: 4 KB per event).
-
-**The honest truth:** if you let an LLM eval arbitrary expressions in a production process, you have given it shell-equivalent power. Don't do that.
-
-### 6. Audit Log
-Opt-in audit trail of every command:
-```bash
-sl-dbg --audit attach ...
-```
-Writes JSON Lines to `~/.local/state/sl-dbg/audit.log`:
-```json
-{"ts":"...","session":"a1b2","cmd":"eval","args":{"expr":"os.system('rm -rf /')"},"result":"refused:read_only"}
-```
-
-### 7. Adapter Process Hygiene
-- Each adapter runs as a child of `sl-dbgd`, inherits its uid, not setuid.
-- Auto-downloaded adapter binaries verified by SHA-256 against pinned checksums.
-- No code execution from network-fetched artifacts beyond running the adapter itself.
-
-### 8. No Telemetry by Default
-If telemetry is added (Phase 6), it is **opt-in only**, anonymous, and never includes:
-- Source code
-- Variable values
-- File paths
-- Breakpoint conditions
-- Target hostnames
-
-Only: command name, language, sl-dbg version, anonymous install ID, success/error counts.
-
-## Recommended Profiles
-
-### Local Development (default)
-- Read-write mode.
-- No allowlist.
-- No audit.
-- Trust local processes.
-
-### CI / Automation
-- `--read-only` for inspection-only jobs.
-- Allowlist to repo root.
-- Audit to artifact storage.
-
-### Production Attach (rare, careful)
-- **Always** `--read-only`.
-- Allowlist to known source paths.
-- Audit log to centralized logging.
-- SSH tunnel — never expose debug ports.
-- Use a service account whose JVM/Python process has narrow permissions.
-- Detach immediately after investigation.
-
-## What sl-dbg WILL NOT Do
-
-- **No remote sl-dbg-to-sl-dbg protocol.** The daemon never accepts external connections.
-- **No bundled adapters from untrusted sources.** Only Microsoft / Google / LLVM / Samsung official releases.
-- **No silent eval.** Every `eval` is audit-loggable.
-- **No source upload to telemetry.** Source paths and contents are local-only.
-- **No remote code execution of plugins.** Plugins (Phase 7) load only local files.
-
-## What sl-dbg CANNOT Protect Against
-
-- **A target process determined to detect/escape debugging** — DAP is cooperative; a hostile process can ptrace-deny, fork to detach, or scramble memory.
-- **An adversary with shell access as the same user** — they can read the socket, read the audit log, MITM the adapter.
-- **A trojaned DAP adapter** — if `debugpy` itself is malicious, sl-dbg cannot help.
-- **Network attacker who can MITM the debug port** — JDWP, CDP, and Delve's network protocols are unencrypted by design. Use SSH tunnels or k8s port-forward.
-
-## Reporting Security Issues
-
-Please report vulnerabilities privately to `security@sl-dbg.dev` (placeholder — set up before public release). Do not file public GitHub issues for security bugs.
-
-See `SECURITY.md` (top-level, planned) for the formal disclosure process.
-
----
-
-## Threat Model
-
-For MCP and agent-driven use, the core trust assumption is that `sl-dbg` is a local per-user debugger. It is not a multi-tenant service and it should not be exposed as a network daemon.
-
-| Actor | Trust level | Assumption |
-|---|---|---|
-| Local user | Trusted | Owns the daemon, socket, audit log, target process, and policy decisions. |
-| Local MCP client | Semi-trusted | Runs as the same user but may forward LLM-generated tool calls or prompt-injected arguments. |
-| Remote LLM provider | Untrusted | Can suggest debugger actions but must not be trusted with implicit filesystem, process, or eval authority. |
-| RAG / web / copy-paste input | Untrusted | May contain malicious instructions, paths, expressions, or launch arguments. |
+## Trust boundaries
 
 ```text
-LLM client → MCP server (sl-dbg mcp) → daemon (Unix socket) → DAP adapter → target program
+MCP client -> sl-dbg mcp -> daemon (Unix socket) -> DAP adapter -> target
 ```
 
-The highest-risk path is untrusted text becoming a debugger command that reads files, launches programs, evaluates expressions, or mutates a paused process.
-
-## Trust Boundaries
-
-| Boundary | What must be validated before forwarding |
+| Actor | Assumption |
 |---|---|
-| LLM client → MCP server | Tool names, JSON schema, argument types, missing required fields, and policy flags such as read-only mode. Treat all model-provided paths, expressions, and program names as untrusted. |
-| MCP server → daemon | Session selection, command allow/deny policy, read-only mutation checks, source-root restrictions, allowed program list, request size, and per-client/session limits. |
-| CLI → daemon | Same daemon-side validation as MCP. A local CLI is trusted to request work, but the daemon still owns canonical enforcement. |
-| Daemon → DAP adapter | Adapter launch path, adapter arguments, environment, working directory, timeout, output size, and protocol framing. Never let adapter-specific errors bypass sl-dbg error handling. |
-| DAP adapter → target program | Launch/attach policy, debug port exposure, eval/set permissions, breakpoint locations, and source lookup roots. Assume target output and DAP responses can be malformed or hostile. |
-| Daemon → audit log | Redact secrets before writing, bound record size, create files with user-only permissions, and avoid logging raw request payloads. |
+| Local user | Owns the daemon, adapters, policy, and target process. |
+| MCP client / LLM | May forward prompt-injected tool arguments; no implicit eval authority. |
+| Target and adapter | Execute with the user's permissions; output may contain secrets or hostile text. |
+| Other local users | Must not access the owner's daemon socket or debugging state. |
 
-## Known Limitations (unfixed)
+CLI and MCP requests share daemon-side checks. Inspection can still expose
+credentials in variables, output, source, and stack frames. Read-only mode is
+not a confidentiality boundary, and sending results to an LLM is a client decision.
 
-These are known residual risks or correctness gaps. Some mitigations may land in the same PR window, but operators should assume the limitation exists until the issue is closed and a release is cut.
+## Implemented controls
 
-- [#18](https://github.com/y0geshpatil/sl-dbg/issues/18): `debug_source` can read arbitrary files unless source roots are restricted. The `--allow-source-root` control is opt-in; if it is not set, source reads may still allow paths under the current working directory.
-- [#19](https://github.com/y0geshpatil/sl-dbg/issues/19): `debug_eval` can trigger language side effects, including file creation or other target-process actions. Eval is not a sandbox.
-- [#20](https://github.com/y0geshpatil/sl-dbg/issues/20): read-only mode still permits inspection commands such as `locals`, `globals`, `output`, and `source`, which can expose runtime secrets.
-- [#21](https://github.com/y0geshpatil/sl-dbg/issues/21): without an explicit program allowlist, agent-driven `start` requests may launch unexpected local binaries.
-- [#22](https://github.com/y0geshpatil/sl-dbg/issues/22): per-client and per-process limits are still being hardened; unrestricted local clients can cause resource pressure by opening sessions.
-- [#23](https://github.com/y0geshpatil/sl-dbg/issues/23): audit logging is required for production accountability but may be opt-in or incomplete until fully implemented.
-- [#4](https://github.com/y0geshpatil/sl-dbg/issues/4): watch expressions may not survive stop/start within the same daemon. This is primarily a correctness issue, but operators should not rely on watches as a persistent safety control.
-- [#3](https://github.com/y0geshpatil/sl-dbg/issues/3): wrapper primitive rendering is a correctness/usability gap, not currently a security boundary.
+The daemon listens on a local Unix-domain socket, not a network port. Its directory
+is created with mode `0700`, and its socket with `0600`. See
+[PLATFORMS.md](PLATFORMS.md) for runtime paths and test isolation. Windows is not
+supported.
 
-## Hardening Recipe
+`--read-only` sessions refuse debugger mutations, including evaluation, variable
+writes, breakpoints, and execution commands. DAP evaluation is not sandboxed:
+the `watch` context does not prevent side effects. Disabling evaluation is a
+separate daemon-wide control.
 
-`sl-dbg mcp` is **secure-by-default** as of v0.5.3 (issue [#70](https://github.com/y0geshpatil/sl-dbg/issues/70)). A bare invocation is treated as `--safe`, with the program allowlist auto-discovered from PATH (java, python3, node, dlv) and the source jail rooted at the cwd. The original behaviour (refuse-without-flags) shipped in [#53](https://github.com/y0geshpatil/sl-dbg/issues/53). The two modes are:
+Source reads are restricted by session source roots and daemon policy. Program
+allowlists and session caps reduce available operations but do not sandbox a
+permitted interpreter or a launched program. They cannot protect against an
+attacker already running as the same local user.
 
-### Recommended (default): `--safe`
+## MCP defaults and hardening
+
+A bare `sl-dbg mcp` uses safe mode: it discovers an interpreter/program allowlist
+from PATH, restricts source reads, disables evaluation, caps sessions, and enables
+an audit log. Configure it explicitly for a project:
 
 ```bash
-# Auto-discovered allowlist; just works for most projects.
-sl-dbg mcp
-
-# Or pin the allowlist explicitly:
 sl-dbg mcp --safe \
-  --allow-program java \
-  --allow-program python3 \
-  --allow-source-root ~/work \
+  --allow-program "$HOME/work/project/app.py" \
+  --allow-source-root "$HOME/work/project" \
   --max-sessions 4 \
-  --audit-log ~/.local/state/sl-dbg/audit.log
+  --audit-log "$HOME/.local/state/sl-dbg/audit.log"
 ```
 
-`--safe` is a single switch that flips on every server-side guard at once. It exports the equivalent `SL_DBG_*` environment variables into the auto-spawned daemon:
-
-| Flag | Daemon env var | Default under `--safe` |
+| Flag | Daemon environment | Safe-mode default |
 |---|---|---|
-| `--allow-program` | `SL_DBG_ALLOW_PROGRAM` | auto-discovered from PATH (java, python3, node, dlv) |
-| `--allow-source-root` | `SL_DBG_ALLOW_SOURCE_ROOT` | current working directory |
+| `--allow-program` | `SL_DBG_ALLOW_PROGRAM` | PATH-discovered java, python3, node, dlv |
+| `--allow-source-root` | `SL_DBG_ALLOW_SOURCE_ROOT` | Current working directory |
 | `--max-sessions` | `SL_DBG_MAX_SESSIONS` | `8` |
-| `--audit-log` | `SL_DBG_AUDIT_LOG` | `$XDG_STATE_HOME/sl-dbg/audit.log` |
-| `--allow-eval` (opt-in) | `SL_DBG_ALLOW_EVAL` | `0` (eval disabled) |
+| `--audit-log` | `SL_DBG_AUDIT_LOG` | `$XDG_STATE_HOME/sl-dbg/audit.log`, or the user's local state directory |
+| `--allow-eval` | `SL_DBG_ALLOW_EVAL` | `0` (disabled) |
 
-Add `--read-only` on top of `--safe` to also hide mutating tools (`start`, `eval`, `set`, `watch add/remove`, execution steps, …) from the MCP surface. This is the strongest posture for unattended LLM clients.
+The discovery list is not a promise of language support: supported adapters are
+Python, Go, and Java. Program rules match the target path, not its interpreter;
+an auto-discovered `python3` entry does not authorize arbitrary Python scripts.
+Explicitly allow trusted target paths before launching them through MCP.
+Add `--read-only` to hide mutating tools from MCP as well.
+Opting into `--allow-eval` grants shell-equivalent capabilities in many targets.
+Do not enable it merely to solve installation or runtime detection problems.
 
-If a daemon is already running with different settings, restart it first:
+Policies apply when a daemon starts. Finish active sessions and stop an existing
+daemon before changing its policy; then restart the MCP client. Stopping a daemon
+interrupts sessions. `SL_DBG_INSECURE=1` explicitly opts out of safe defaults and
+is not recommended for unattended agent use.
 
-```bash
-sl-dbg daemon stop
-```
+Audit records and daemon logs are local. Request arguments are redacted before
+logging, but target output and inspection responses can contain sensitive data.
+Treat logs, backups, and client transcripts accordingly.
 
-### Opt-out: `SL_DBG_INSECURE=1`
+## Installation and updates
 
-For local single-developer use where the MCP caller is a human-driven editor (not an autonomous agent), set `SL_DBG_INSECURE=1` to re-enable the legacy permissive defaults. The server prints a loud startup banner listing exactly what guards are off. **Never use this mode for unattended LLM workflows.**
+The binary installer requires a matching release SHA-256 manifest and HTTPS.
+Released Java adapter downloads require the same tag's JAR and checksum sidecar;
+custom adapter URLs require an explicit expected SHA-256. Checksums detect
+corruption but are not signatures or an independent guarantee against a
+compromised release account. Python and Go adapters are installed through pip
+and the Go toolchain respectively.
 
-Operational notes:
+The installer does not execute Maven as a fallback for a failed released Java
+download. Development builds may explicitly build the checked-out launcher.
+Never use an untrusted source checkout as an installation directory.
 
-- Run the MCP client, daemon, and target under the least-privileged local user that can debug the process.
-- Never expose the daemon socket or MCP stdio bridge over a network service.
-- Use SSH tunnels or Kubernetes port-forwarding for remote debug ports.
-- Keep eval disabled or covered by read-only policy for unattended LLM workflows.
-- Review the audit log after agent-driven sessions and rotate it with user-only permissions.
+## Remote debugging and limitations
+
+Bind JDWP/debugpy/Delve ports to loopback and tunnel them over SSH or a trusted
+port-forward. Debug protocols do not provide a general encrypted/authenticated
+transport. Never expose debug ports publicly.
+
+There is no telemetry. Config-file presets, `--audit`, source-file glob
+`--allowlist-files` / `--denylist-files`, Windows ACLs, plugins, and eval sandboxing
+are not implemented controls. Historical design examples are not security
+guarantees. Use current `--help`, [COMMANDS.md](COMMANDS.md), and the running
+server's `tools/list` for actual interfaces.
+
+Report vulnerabilities privately using the root [security policy](../SECURITY.md).

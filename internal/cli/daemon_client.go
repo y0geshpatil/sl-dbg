@@ -67,7 +67,16 @@ func spawnDaemon() error {
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-	return cmd.Start()
+	return startDaemonProcess(cmd)
+}
+
+func startDaemonProcess(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// MCP is long-lived; reap its exited daemon child instead of leaving a zombie.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 // emitResp emits a proto.Response as the user-facing JSON envelope.

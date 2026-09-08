@@ -38,10 +38,10 @@ If you're wiring sl-dbg into an LLM via function calling, expose these tools:
   "input_schema": {
     "type": "object",
     "properties": {
-      "lang": {"type":"string","enum":["python","java","go","node","cpp","dotnet","rust"]},
+      "lang": {"type":"string","enum":["python","java","go"]},
       "program": {"type":"string"},
       "args": {"type":"array","items":{"type":"string"}},
-      "stop_on_entry": {"type":"boolean"},
+      "stopOnEntry": {"type":"boolean"},
       "name": {"type":"string","description":"optional human-friendly id for the new session (must be unique within the daemon); auto-generated if omitted"}
     },
     "required": ["lang","program"]
@@ -57,15 +57,44 @@ Map the rest similarly:
 | `debug_break` | `sl-dbg break <loc>` |
 | `debug_unbreak` | `sl-dbg unbreak <id>` |
 | `debug_continue` | `sl-dbg continue` |
-| `debug_step_over` | `sl-dbg next` |
-| `debug_step_into` | `sl-dbg step` |
-| `debug_step_out` | `sl-dbg finish` |
+| `debug_next` | `sl-dbg next` |
+| `debug_step` | `sl-dbg step` |
+| `debug_finish` | `sl-dbg finish` |
 | `debug_snapshot` | `sl-dbg snapshot` |
 | `debug_eval` | `sl-dbg eval <expr>` |
-| `debug_set_var` | `sl-dbg set <name> <value>` |
+| `debug_set` | `sl-dbg set <name> <value>` |
 | `debug_stop` | `sl-dbg stop` |
 
 When using MCP, `sl-dbg mcp` exposes these as native JSON-RPC 2.0 tools — zero glue. Every tool accepts an optional `session` string; omit it and the daemon's default (newest started) is used.
+
+### Register a client
+
+Install the binary and language adapter first, then run
+`sl-dbg mcp install <claude|cursor|vscode|codex|copilot>` from the project you
+want to debug. `claude` means Claude Desktop, not Claude Code. Use `--dry-run`
+to preview or `sl-dbg mcp install --print` for manual configuration.
+VS Code uses the workspace `.vscode/mcp.json` `servers` object; Copilot CLI uses
+`~/.copilot/mcp-config.json` `mcpServers`. Other client-specific locations are
+printed by the command.
+
+For launching a Python script, explicitly allow the target path:
+`sl-dbg mcp install vscode --allow-program "$PWD/demo.py"`.
+`--allow-program` matches the target's `program`, not its interpreter. The
+default PATH-discovered `python3` entry does not permit arbitrary `.py` files;
+`PROGRAM_NOT_ALLOWED` means the requested target needs an explicit allowance.
+
+Registrations use an absolute executable path and safe mode. Restart clients after
+registration; after moving the binary, repeat installation with `--force`. Backups
+preserve prior configs; failures return a nonzero exit even when some clients in
+`all` succeeded. Unsupported TOML forms require manual editing, not a destructive
+rewrite. `mcp uninstall` removes only the selected server entry.
+
+The MCP host must also find the language runtime on its PATH. GUI applications
+may inherit a different PATH from your terminal. Query `debug_adapters` to
+diagnose detection. Evaluation is denied by default (tools remain listed unless
+read-only mode hides them); do not
+enable `--insecure` to work around a missing runtime. `tools/list` from your
+running server is authoritative, not a design example.
 
 ### MCP composites (highly recommended for agents)
 
@@ -117,7 +146,7 @@ hypothesis = "the cache is being invalidated too aggressively"
 2. continue → paused
 3. snapshot
 4. watch <expr that holds the value>
-5. step back (or restart with watch) and step through forward
+5. restart with watch and step through forward (reverse execution is not supported)
 6. snapshot at each step → trace the value's origin
 ```
 

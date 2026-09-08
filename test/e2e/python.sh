@@ -3,7 +3,7 @@
 # Exercises: start, break (line + --once), watch, source, eval, globals,
 # events, output, listen, continue, breaks, snapshot, until, break-ex, stop.
 #
-# Prereqs: python3 with debugpy installed (`pip install --user debugpy`)
+# Prereqs: PATH python3 with debugpy available (e.g. a development venv)
 #          sl-dbg binary on $PATH or at $REPO/bin/sl-dbg
 #
 # Exit codes:
@@ -15,26 +15,37 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
-# eval/set/watch/conditional-bp are default-denied on the daemon (#54); enable for tests.
-export SL_DBG_ALLOW_EVAL="${SL_DBG_ALLOW_EVAL:-1}"
 PROG="$REPO/examples/python/buggy.py"
 
 if ! command -v python3 >/dev/null 2>&1; then
   echo "SKIP: python3 not on PATH" >&2; exit 77
 fi
-if ! python3 -c "import debugpy" >/dev/null 2>&1; then
-  echo "SKIP: debugpy not installed (run: pip install --user debugpy)" >&2; exit 77
+DEBUGPY_ROOT=""
+# Do not transplant a managed venv's packages into a different target Python.
+if ! DEBUGPY_ROOT=$(PYTHONDONTWRITEBYTECODE=1 python3 -c 'import pathlib, debugpy; print(pathlib.Path(debugpy.__file__).parent.parent)' 2>/dev/null); then
+  echo "SKIP: PATH python3 cannot import debugpy (use a debugpy-enabled Python environment)" >&2; exit 77
 fi
 if [[ ! -x "$SLDBG" ]]; then
   echo "SKIP: sl-dbg not built at $SLDBG (run: make build)" >&2; exit 77
 fi
 
+source "$SCRIPT_DIR/common.sh"
+e2e_isolate
+STOP_OUT=$("$SLDBG" daemon stop)
+echo "$STOP_OUT" | grep -q '"shutdown":"not running"'
+[[ ! -S "$SL_DBG_SOCKET" ]]
+export PYTHONPATH="$DEBUGPY_ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export SL_DBG_E2E_MARKER="$E2E_ROOT/read-only-side-effect"
+
 FAIL=0
 fail() { echo "FAIL: $*" >&2; FAIL=$((FAIL+1)); }
 contains() { echo "$1" | grep -q "$2" || fail "expected $2 in: $1"; }
 
-# Use a unique session id (start auto-generates one; we just track by listing).
-"$SLDBG" stop 2>/dev/null || true
+echo "== install-adapter python detects existing debugpy without installing =="
+OUT=$("$SLDBG" install-adapter python 2>&1)
+contains "$OUT" 'debugpy already available'
+[[ ! -e "$HOME/.cache/sl-dbg/adapters/python" ]] || fail "detection created a managed environment"
+[[ ! -e "$SL_DBG_SOCKET" ]] || fail "install-adapter started a daemon"
 
 echo "== start =="
 OUT=$("$SLDBG" start --lang python --program "$PROG" --stop-on-entry)
@@ -92,18 +103,16 @@ echo "== stop =="
 
 # Issue #56 (security): --read-only must refuse `eval`, not just mutators.
 echo "== read-only blocks eval (issue #56) =="
-"$SLDBG" stop 2>/dev/null || true
 OUT=$("$SLDBG" start --lang python --program "$PROG" --stop-on-entry --read-only)
 contains "$OUT" '"state":"paused"'
 # Sanity: a known mutator is rejected.
 SET_OUT=$("$SLDBG" set x 99 2>&1 || true)
 contains "$SET_OUT" 'READ_ONLY_MODE'
 # The fix: eval must also be rejected with READ_ONLY_MODE.
-EVAL_OUT=$("$SLDBG" eval "__import__('os').system('touch /tmp/sl_dbg_pwn_check')" 2>&1 || true)
+EVAL_OUT=$("$SLDBG" eval "__import__('pathlib').Path(__import__('os').environ['SL_DBG_E2E_MARKER']).touch()" 2>&1 || true)
 contains "$EVAL_OUT" 'READ_ONLY_MODE'
-if [[ -e /tmp/sl_dbg_pwn_check ]]; then
-  fail "read-only eval executed side effect (touched /tmp/sl_dbg_pwn_check)"
-  rm -f /tmp/sl_dbg_pwn_check
+if [[ -e "$SL_DBG_E2E_MARKER" ]]; then
+  fail "read-only eval executed side effect (created owned marker)"
 fi
 "$SLDBG" stop >/dev/null
 

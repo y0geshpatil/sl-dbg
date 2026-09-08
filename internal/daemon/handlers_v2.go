@@ -593,8 +593,11 @@ func (s *Server) handleBreakFn(ctx context.Context, req proto.Request) proto.Res
 	}
 	for i, rbp := range resp.Body.Breakpoints {
 		if i < len(all) {
-			all[i].DAPID = rbp.Id
-			all[i].Verified = rbp.Verified
+			sess.UpdateFuncBP(all[i].LocalID, rbp.Id, rbp.Verified)
+			if all[i].LocalID == bp.LocalID {
+				bp.DAPID = rbp.Id
+				bp.Verified = rbp.Verified
+			}
 		}
 	}
 	return ok(proto.BreakResult{

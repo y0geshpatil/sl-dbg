@@ -4,10 +4,20 @@
 
 **Do not file public issues for security vulnerabilities.** Instead:
 
-1. Email the maintainer (`@y0geshpatil`) directly, OR
-2. Use GitHub's [private security advisory flow](https://github.com/y0geshpatil/sl-dbg/security/advisories/new).
+Use GitHub's [private security advisory flow](https://github.com/y0geshpatil/sl-dbg/security/advisories/new).
+If private reporting is unavailable, ask the maintainer to enable it without
+posting vulnerability details publicly.
 
-You should receive an acknowledgement within **72 hours**. We will work with you on a coordinated disclosure timeline, typically 30–90 days depending on severity.
+Include the affected version, platform, reproduction steps, impact, and any
+proposed fix. Please omit real credentials or private target data. Maintainers
+will coordinate a disclosure timeline; this volunteer project has no guaranteed
+response SLA.
+
+## Supported versions
+
+Security fixes target the latest source and next release. Older releases are not
+maintained as separate security branches. Review release notes before upgrading,
+finish active debug sessions, stop the old daemon, and restart MCP clients.
 
 ## In scope
 

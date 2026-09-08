@@ -1,16 +1,21 @@
 package cli
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
+	"github.com/y0geshpatil/sl-dbg/internal/adapter"
 	"github.com/y0geshpatil/sl-dbg/internal/buildinfo"
 )
 
@@ -23,13 +28,13 @@ func newInstallAdapterCmdImpl() *cobra.Command {
 		Short: "Install or refresh a language adapter (python|go|java|all)",
 		Long: `Install the runtime adapter sl-dbg uses for a given language.
 
-  python  →  pip install --user debugpy
+  python  →  install debugpy in an isolated, sl-dbg-managed virtual environment
   go      →  go install github.com/go-delve/delve/cmd/dlv@latest
   java    →  downloads pre-built sl-dbg-java-adapter.jar from GitHub Releases
-            into ~/.cache/sl-dbg/adapters/ (no Maven required); falls back to
-            a local Maven build when run from a source checkout.
-  all     →  install every adapter for which the prerequisite toolchain
-            is available; skip the others with a clear hint.`,
+            into ~/.cache/sl-dbg/adapters/ with SHA-256 verification.
+            Development builds use local Maven source instead.
+  all     →  attempt every adapter; report each failure and exit nonzero
+            if any prerequisite or installation is unavailable.`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			lang := strings.ToLower(args[0])
@@ -55,22 +60,32 @@ func newInstallAdapterCmdImpl() *cobra.Command {
 
 func installPython(force bool) error {
 	if !force {
-		if _, err := exec.LookPath("python3"); err == nil {
-			if err := runCheck("python3", "-c", "import debugpy"); err == nil {
-				stepOK("python", "debugpy already installed")
-				return nil
-			}
+		if py, err := adapter.PythonAdapterPath(); err == nil {
+			stepOK("python", "debugpy already available via %s", py)
+			return nil
 		}
 	}
-	py, err := exec.LookPath("python3")
+	py, err := adapter.PythonPath()
 	if err != nil {
-		py, err = exec.LookPath("python")
+		return err
 	}
+	dir, err := adapter.PythonVenvDir()
 	if err != nil {
-		return fmt.Errorf("python3 not found in PATH — install Python 3.8+ first")
+		return err
 	}
-	stepInfo("python", "installing debugpy via %s -m pip", py)
-	return runStreamed(py, "-m", "pip", "install", "--user", "--upgrade", "debugpy")
+	stepInfo("python", "creating isolated adapter environment at %s", dir)
+	if err := runStreamed(py, "-m", "venv", dir); err != nil {
+		return fmt.Errorf("create debugpy virtual environment: %w; install Python's venv support (Debian/Ubuntu: python3-venv)", err)
+	}
+	venvPython := filepath.Join(dir, "bin", "python")
+	if err := runStreamed(venvPython, "-m", "pip", "install", "--upgrade", "debugpy"); err != nil {
+		return fmt.Errorf("install debugpy in %s: %w", dir, err)
+	}
+	if err := runCheck(venvPython, "-c", "import debugpy"); err != nil {
+		return fmt.Errorf("debugpy installation verification failed: %w", err)
+	}
+	stepOK("python", "installed debugpy in %s", dir)
+	return nil
 }
 
 // ----- go ------------------------------------------------------------------
@@ -83,18 +98,17 @@ func installGo(force bool) error {
 		}
 	}
 	if _, err := exec.LookPath("go"); err != nil {
-		return fmt.Errorf("`go` not found in PATH — install Go 1.21+ first " +
+		return fmt.Errorf("`go` not found in PATH — install a current Go toolchain first " +
 			"(brew install go, or https://go.dev/dl)")
 	}
 	stepInfo("go", "installing delve (go install github.com/go-delve/delve/cmd/dlv@latest)")
 	if err := runStreamed("go", "install", "github.com/go-delve/delve/cmd/dlv@latest"); err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("dlv"); err != nil {
-		gobin := goBinDir()
-		fmt.Fprintf(os.Stderr,
-			"  ⚠ dlv installed to %s but that directory is not on $PATH.\n"+
-				"     Add it: export PATH=\"%s:$PATH\"\n", gobin, gobin)
+	if path, err := adapter.DelvePath(); err != nil {
+		return fmt.Errorf("go install completed but dlv is unavailable in %s: %w", goBinDir(), err)
+	} else {
+		stepOK("go", "dlv available at %s", path)
 	}
 	return nil
 }
@@ -102,25 +116,12 @@ func installGo(force bool) error {
 // dlvFound reports whether dlv is reachable either via PATH or via the
 // standard go install location ($GOBIN, $GOPATH/bin, ~/go/bin).
 func dlvFound() bool {
-	if _, err := exec.LookPath("dlv"); err == nil {
-		return true
-	}
-	candidate := filepath.Join(goBinDir(), "dlv")
-	if fi, err := os.Stat(candidate); err == nil && !fi.IsDir() {
-		return true
-	}
-	return false
+	_, err := adapter.DelvePath()
+	return err == nil
 }
 
 func goBinDir() string {
-	if v := os.Getenv("GOBIN"); v != "" {
-		return v
-	}
-	if v := os.Getenv("GOPATH"); v != "" {
-		return filepath.Join(strings.Split(v, string(os.PathListSeparator))[0], "bin")
-	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, "go", "bin")
+	return adapter.GoBinDir()
 }
 
 // ----- java ----------------------------------------------------------------
@@ -128,19 +129,19 @@ func goBinDir() string {
 const javaAdapterJar = "sl-dbg-java-adapter.jar"
 
 func installJava(force bool) error {
+	if _, err := exec.LookPath("java"); err != nil {
+		return fmt.Errorf("`java` not found in PATH — install JDK 11+ first")
+	}
 	dest, err := adapterCacheDir()
 	if err != nil {
 		return err
 	}
 	destPath := filepath.Join(dest, javaAdapterJar)
 	if !force {
-		if _, err := os.Stat(destPath); err == nil {
+		if err := adapter.ValidateJavaJar(destPath); err == nil {
 			stepOK("java", "%s already present", destPath)
 			return nil
 		}
-	}
-	if _, err := exec.LookPath("java"); err != nil {
-		return fmt.Errorf("`java` not found in PATH — install JDK 11+ first")
 	}
 
 	// Strategy 1: download a prebuilt jar from GitHub Releases if the user
@@ -148,7 +149,7 @@ func installJava(force bool) error {
 	// want to install Maven.
 	if url := os.Getenv("SL_DBG_JAVA_ADAPTER_URL"); url != "" {
 		stepInfo("java", "downloading %s", url)
-		return downloadFile(url, destPath)
+		return downloadFile(url, destPath, os.Getenv("SL_DBG_JAVA_ADAPTER_SHA256"))
 	}
 
 	// Strategy 2: auto-download the pre-built jar from the GitHub release that
@@ -159,37 +160,32 @@ func installJava(force bool) error {
 	// buildinfo.Version is injected by goreleaser as the bare semver ("1.2.3"),
 	// without a leading "v". GitHub release tags use the "v" prefix, so we add
 	// it when constructing the download URL.
-	releaseTried := false
 	if binaryVersion := buildinfo.Version; isReleaseVersion(binaryVersion) {
-		releaseTried = true
 		url := fmt.Sprintf("https://github.com/y0geshpatil/sl-dbg/releases/download/v%s/sl-dbg-java-adapter.jar", binaryVersion)
 		stepInfo("java", "downloading pre-built adapter jar from GitHub Releases (%s)", url)
-		if err := downloadFile(url, destPath); err == nil {
+		releaseErr := downloadJavaRelease(url, destPath)
+		if releaseErr == nil {
 			stepOK("java", "installed %s", destPath)
 			return nil
 		}
-		stepInfo("java", "release download failed; falling back to local Maven build")
+		// A release must never silently execute a different local adapter build.
+		return fmt.Errorf("Java release adapter download failed: %w; retry or explicitly build adapters/java-launcher with Maven", releaseErr)
 	}
 
 	// Strategy 3: build from in-tree source if we can find the Maven project.
 	src := findJavaLauncherSource()
 	if src == "" {
 		hint := "  Options:\n" +
-			"    - Set SL_DBG_JAVA_ADAPTER_URL to a direct jar download URL, or\n" +
+			"    - Set SL_DBG_JAVA_ADAPTER_URL and SL_DBG_JAVA_ADAPTER_SHA256, or\n" +
 			"    - Place sl-dbg-java-adapter.jar manually in ~/.cache/sl-dbg/adapters/"
-		if releaseTried {
-			return fmt.Errorf(
-				"GitHub Release download failed and no local source tree was found.\n" +
-					"  Check your internet connection and try again, or:\n" + hint)
-		}
 		return fmt.Errorf(
-			"no prebuilt jar available and the in-tree Maven project "+
-				"adapters/java-launcher was not found.\n"+
-				"  Use a released binary (install.sh) so the jar is downloaded automatically, or:\n"+hint)
+			"no prebuilt jar available and the in-tree Maven project " +
+				"adapters/java-launcher was not found.\n" +
+				"  Use a released binary (install.sh) so the jar is downloaded automatically, or:\n" + hint)
 	}
 	if _, err := exec.LookPath("mvn"); err != nil {
 		return fmt.Errorf("Maven not found in PATH — install with `brew install maven` " +
-			"(or set SL_DBG_JAVA_ADAPTER_URL to skip the build)")
+			"(or set SL_DBG_JAVA_ADAPTER_URL and SL_DBG_JAVA_ADAPTER_SHA256 to skip the build)")
 	}
 	stepInfo("java", "building launcher via Maven at %s", src)
 	if err := runStreamedIn(src, "mvn", "-q", "-DskipTests", "package"); err != nil {
@@ -227,7 +223,7 @@ func findJavaLauncherSource() string {
 // isReleaseVersion reports whether ver looks like a published release (e.g.
 // "1.2.3") rather than a dev build ("0.0.0-dev") or snapshot ("1.2.3-next").
 func isReleaseVersion(ver string) bool {
-	return ver != "" &&
+	return releaseVersionPattern.MatchString(ver) &&
 		ver != "0.0.0-dev" &&
 		!strings.HasPrefix(ver, "v") &&
 		!strings.HasSuffix(ver, "-dev") &&
@@ -235,6 +231,8 @@ func isReleaseVersion(ver string) bool {
 		!strings.Contains(ver, "-dirty") &&
 		!strings.Contains(ver, "+")
 }
+
+var releaseVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$`)
 
 func adapterCacheDir() (string, error) {
 	home, err := os.UserHomeDir()
@@ -280,7 +278,9 @@ func installAll(force bool) error {
 // ----- helpers -------------------------------------------------------------
 
 func runCheck(name string, args ...string) error {
-	c := exec.Command(name, args...)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c := exec.CommandContext(ctx, name, args...)
 	c.Stdout = io.Discard
 	c.Stderr = io.Discard
 	return c.Run()
@@ -314,34 +314,102 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-	if _, err := io.Copy(out, in); err != nil {
-		return err
-	}
-	return nil
+	return writeJavaJar(in, dst, "")
 }
 
-func downloadFile(url, dst string) error {
-	resp, err := http.Get(url) //nolint:gosec — user-supplied URL is the intent
+var adapterHTTPClient = &http.Client{
+	Timeout: 2 * time.Minute,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("adapter downloads require HTTPS")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("too many redirects")
+		}
+		return nil
+	},
+}
+
+func adapterDownload(url string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if req.URL.Scheme != "https" {
+		return nil, fmt.Errorf("adapter downloads require HTTPS")
+	}
+	resp, err := adapterHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
+		return nil, fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
+	return resp, nil
+}
+
+func validSHA256(sum string) bool {
+	decoded, err := hex.DecodeString(sum)
+	return err == nil && len(decoded) == sha256.Size
+}
+
+func downloadJavaRelease(url, dst string) error {
+	resp, err := adapterDownload(url + ".sha256")
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
-	}
-	out, err := os.Create(dst)
+	content, err := io.ReadAll(io.LimitReader(resp.Body, 4097))
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, resp.Body)
-	return err
+	fields := strings.Fields(string(content))
+	if len(content) > 4096 || len(fields) != 2 || !validSHA256(fields[0]) || strings.TrimPrefix(fields[1], "*") != javaAdapterJar {
+		return fmt.Errorf("invalid Java adapter SHA-256 sidecar")
+	}
+	return downloadFile(url, dst, fields[0])
 }
 
-// keep linter happy when GOOS-specific paths aren't used
-var _ = runtime.GOOS
+func downloadFile(url, dst, checksum string) error {
+	if !validSHA256(checksum) {
+		return fmt.Errorf("a valid SHA-256 checksum is required (set SL_DBG_JAVA_ADAPTER_SHA256 for a custom URL)")
+	}
+	resp, err := adapterDownload(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	return writeJavaJar(resp.Body, dst, checksum)
+}
+
+func writeJavaJar(in io.Reader, dst, checksum string) error {
+	out, err := os.CreateTemp(filepath.Dir(dst), ".java-adapter-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(out.Name())
+	defer out.Close()
+	hash := sha256.New()
+	const maxJarSize = 256 << 20
+	n, err := io.Copy(io.MultiWriter(out, hash), io.LimitReader(in, maxJarSize+1))
+	if err != nil {
+		return err
+	}
+	if n > maxJarSize {
+		return fmt.Errorf("Java adapter exceeds 256 MiB download limit")
+	}
+	if checksum != "" && !strings.EqualFold(hex.EncodeToString(hash.Sum(nil)), checksum) {
+		return fmt.Errorf("Java adapter SHA-256 mismatch")
+	}
+	if err := out.Chmod(0o644); err != nil {
+		return err
+	}
+	if err := out.Close(); err != nil {
+		return err
+	}
+	if err := adapter.ValidateJavaJar(out.Name()); err != nil {
+		return err
+	}
+	return os.Rename(out.Name(), dst)
+}

@@ -789,14 +789,19 @@ func (s *Server) handleExec(ctx context.Context, req proto.Request, kind execKin
 	// Install waiter BEFORE issuing the resume request to avoid losing the stop.
 	waiter := sess.InstallWaiter()
 
-	if err := sess.EnsureConfigurationDone(ctx); err != nil {
+	configured, err := sess.EnsureConfigurationDone(ctx)
+	if err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 
 	var execErr error
 	switch kind {
 	case execContinue:
-		execErr = sess.Client().Continue(ctx, tid, args.SingleThread)
+		// Java's configurationDone starts the suspended VM. A second resume
+		// can release a class-prepare suspension before its breakpoints bind.
+		if !configured || sess.Lang != "java" {
+			execErr = sess.Client().Continue(ctx, tid, args.SingleThread)
+		}
 	case execStep:
 		execErr = sess.Client().StepIn(ctx, tid, args.SingleThread)
 	case execNext:
@@ -876,7 +881,7 @@ func (s *Server) handlePause(ctx context.Context, req proto.Request) proto.Respo
 			Location: loc, HitBP: hitBP,
 		})
 	}
-	if err := sess.EnsureConfigurationDone(ctx); err != nil {
+	if _, err := sess.EnsureConfigurationDone(ctx); err != nil {
 		return errResp("ADAPTER_FAILED", err.Error(), "")
 	}
 	// Pick a thread to pause. CurrentThread() returns 0 right after a

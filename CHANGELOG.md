@@ -6,6 +6,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-09-08
+
+### Changed
+- Binary installation defaults to `~/.local/bin`, without automatic sudo or shell-profile edits. Explicit `INSTALL_DIR` remains supported; put it on the `bash` side of a download pipeline.
+- Binary downloads require HTTPS and release SHA-256 checksums, verify the executable before atomic replacement, and retain existing installations on failure. The checksum bypass is removed.
+- Python adapter installation uses an isolated managed virtual environment instead of `pip --user`. Go detection includes persisted `go env` install paths.
+- Java release installation requires the matching version's JAR and `sl-dbg-java-adapter.jar.sha256`; failures no longer silently build a different local adapter. Refresh cached Java adapters with `--force` after upgrading.
+- Release packaging includes all four macOS/Linux amd64/arm64 archives, documentation, full Apache-2.0 license, Java JAR, and checksum sidecar. Inactive Homebrew publishing is removed.
+
+### Fixed
+- Correct VS Code and Copilot CLI MCP registration paths/schemas, preserve existing configuration safely, propagate partial failures, and allow client-free uninstall.
+- Retain entry pauses that arrive before launch completes without replaying stale stops into subsequent resume operations.
+- Avoid a redundant initial Java resume after `configurationDone`, which could skip breakpoints during suspended attach on JDK 11.
+- Return and persist the adapter's function-breakpoint verification instead of discarding updates to a copied breakpoint list. Expanded regression coverage requires actual function hits on JDK 11 and JDK 26.
+- `daemon stop` no longer starts an absent daemon and waits for acknowledged shutdown. Long-lived MCP processes reap exited daemon children so an immediate restart can succeed.
+- Isolate smoke tests and MCP documentation generation from user daemons, caches, and configuration.
+
+### Upgrade notes
+- Existing `/usr/local/bin` installations may shadow `~/.local/bin`; check `command -v sl-dbg` and update PATH or use the original `INSTALL_DIR`. Re-register MCP clients with `--force` when moving the executable.
+- Finish debugging sessions, run `sl-dbg daemon stop`, then restart MCP clients. Use explicit target-path permissions, for example `sl-dbg mcp install vscode --allow-program "$PWD/demo.py"`; interpreter names alone do not permit arbitrary script paths.
+- The older v0.5.4 release lacks the Java JAR. Its MCP registration and daemon lifecycle behavior also predates these fixes.
+
+### Known limitations
+- Breakpoints initially pending before class load may remain reported pending in `breaks` after asynchronous adapter binding; loaded-class function verification and actual runtime hits are covered by the expanded Java smoke.
+- Windows and Homebrew distribution are not supported. Checksums detect corrupted assets, not a compromised release publisher.
+
+## Historical development notes
+
+The notes below were previously grouped as unreleased work. They are retained
+for history, not as the current installation or compatibility contract.
+
 ### Added
 - Security threat-model documentation for the LLM → MCP → daemon → DAP adapter → target boundary, including hardening guidance for production MCP use (#24).
 - GitHub Actions CI for Ubuntu and macOS with `go vet`, `go build`, `go test`, and Python/Go/Java e2e smoke coverage; added a lint workflow with `golangci-lint` when configured and `go vet` fallback (#32).
