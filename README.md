@@ -187,7 +187,8 @@ macOS is the tested development platform and Linux is supported with per-user Un
 ## Language-specific caveats
 
 **Java**
-- The current Java smoke observes `break-fn Buggy.compute` returning `verified:false` even after the class is loaded. Line breakpoints and inspection pass; the full Java suite is not green.
+- Release validation is currently blocked on JDK 11: the suspended attach smoke misses its line breakpoint and the target exits before inspection. This occurs on both Linux/macOS CI and in an isolated Temurin 11 reproduction, including an unconditional breakpoint. Do not treat Java release readiness as verified.
+- On the separately exercised JDK 26 path, line breakpoints and inspection pass, but `break-fn Buggy.compute` returns `verified:false` even after the class is loaded. The full Java suite is not green.
 - Compile with `javac -g` to get local variables — without `-g`, `locals` returns only `arg0/arg1/…` (JDWP limitation; `sl-dbg` will print a hint when it detects this).
 - `globals` returns no scope because the Java DAP doesn't expose statics as a scope. Use `sl-dbg eval ClassName.fieldName` (the `Hint` field on the response points at the current class).
 - Conditional breakpoints on a `for (...)` header line fire on loop init when the loop variable isn't yet in scope. Put the breakpoint on the body line for reliable conditions.

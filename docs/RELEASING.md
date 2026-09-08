@@ -53,6 +53,10 @@ not evidence of a successful language integration.
 The current Java suite has an unresolved function-breakpoint verification
 assertion (`Buggy.compute` stays unverified after class load). Do not suppress
 that failure or describe the full suite as passing.
+Release CI on JDK 11 also misses the earlier line breakpoint after suspended
+attach, causing the target to exit before inspection. Both platforms fail this
+gate; an isolated Temurin 11 reproduction also misses an unconditional
+breakpoint. **Do not merge/tag/publish around this failure.**
 
 ## Publish (maintainer action)
 

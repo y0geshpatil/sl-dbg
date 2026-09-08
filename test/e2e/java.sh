@@ -73,6 +73,11 @@ contains "$OUT" '"line":24'
 echo "== continue (should stop at first negative item) =="
 OUT=$("$SLDBG" continue)
 contains "$OUT" '"reason":"breakpoint"'
+if [[ "$OUT" != *'"reason":"breakpoint"'* ]]; then
+  "$SLDBG" output >&2
+  "$SLDBG" events --tail 20 >&2
+  exit 1
+fi
 
 echo "== eval: qualified static call =="
 OUT=$("$SLDBG" eval "Buggy.compute(item)")

@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The older v0.5.4 release lacks the Java JAR. Its MCP registration and daemon lifecycle behavior also predates these fixes.
 
 ### Known limitations
+- Release is blocked by JDK 11 line-breakpoint failures after suspended attach on macOS/Linux CI; the target exits before inspection. An isolated Temurin 11 reproduction also misses an unconditional line breakpoint.
 - The Java smoke test observes `break-fn Buggy.compute` returning `verified:false` after the class is loaded. Line/conditional breakpoints and inspection work in the exercised flow; the full Java suite is not claimed to pass.
 - Windows and Homebrew distribution are not supported. Checksums detect corrupted assets, not a compromised release publisher.
 
