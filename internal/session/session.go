@@ -455,17 +455,18 @@ func (m *Manager) CreateAttach(ctx context.Context, args proto.AttachArgs) (*Ses
 
 // EnsureConfigurationDone sends DAP configurationDone exactly once, just before
 // the first user-issued command that resumes execution. Safe to call repeatedly.
-func (s *Session) EnsureConfigurationDone(ctx context.Context) error {
+// The result reports whether this call sent the request.
+func (s *Session) EnsureConfigurationDone(ctx context.Context) (bool, error) {
 	s.configDoneMu.Lock()
 	defer s.configDoneMu.Unlock()
 	if !s.pendingConfigDone {
-		return nil
+		return false, nil
 	}
 	if err := s.cli.ConfigurationDone(ctx); err != nil {
-		return fmt.Errorf("dap configurationDone: %w", err)
+		return false, fmt.Errorf("dap configurationDone: %w", err)
 	}
 	s.pendingConfigDone = false
-	return nil
+	return true, nil
 }
 
 // startAdapter spawns the adapter subprocess and returns a Session shell.
@@ -1245,6 +1246,18 @@ func (s *Session) FuncBPs() []FuncBP {
 	out := make([]FuncBP, len(s.funcBPs))
 	copy(out, s.funcBPs)
 	return out
+}
+
+func (s *Session) UpdateFuncBP(localID, dapID int, verified bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.funcBPs {
+		if s.funcBPs[i].LocalID == localID {
+			s.funcBPs[i].DAPID = dapID
+			s.funcBPs[i].Verified = verified
+			return
+		}
+	}
 }
 
 func (s *Session) RemoveFuncBPByID(id int) bool {

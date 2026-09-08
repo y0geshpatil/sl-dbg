@@ -145,6 +145,15 @@ func TestFuncBPManagement(t *testing.T) {
 	if got := s.FuncBPs(); len(got) != 1 || got[0].LocalID != 2 {
 		t.Errorf("after remove: %+v", got)
 	}
+	s.UpdateFuncBP(2, 42, true)
+	if got := s.FuncBPs()[0]; got.DAPID != 42 || !got.Verified {
+		t.Fatalf("verification not persisted: %+v", got)
+	}
+	s.UpdateFuncBP(999, 99, true)
+	s.UpdateFuncBP(2, 43, false)
+	if got := s.FuncBPs(); len(got) != 1 || got[0].DAPID != 43 || got[0].Verified {
+		t.Fatalf("verification reset or missing-id update failed: %+v", got)
+	}
 }
 
 func TestExcFiltersRoundTrip(t *testing.T) {

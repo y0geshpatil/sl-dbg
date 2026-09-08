@@ -28,15 +28,15 @@ That's it. No REPL. No protocol. Just commands.
 |---|---|---|---|
 | Python | `debugpy` (Microsoft) | `sl-dbg install-adapter python` | ✅ |
 | Go | `dlv dap` (Delve) | `sl-dbg install-adapter go` | ✅ |
-| Java | `java-debug` (Microsoft, embedded launcher) | `sl-dbg install-adapter java` | Launch/attach and inspection; function-breakpoint limitation below |
+| Java | `java-debug` (Microsoft, embedded launcher) | `sl-dbg install-adapter java` | Launch/attach, line/conditional/function breakpoints, inspection |
 
 ### Why is Java different?
 Microsoft's `java-debug` needs a standalone launcher outside an IDE. This
 repository builds that launcher in `adapters/java-launcher`; complete releases
 include `sl-dbg-java-adapter.jar` and its SHA-256 sidecar. Released binaries fetch
 the adapter from their matching release; end users need JDK 11+, not Maven.
-**The existing v0.5.4 release lacks the Java JAR.** Until a complete release is
-published, use the [documented source build](docs/ADAPTERS.md) for Java.
+**The older v0.5.4 release lacks the Java JAR.** Choose a release containing both
+Java assets, or use the [documented source build](docs/ADAPTERS.md).
 
 ## Why?
 
@@ -187,8 +187,8 @@ macOS is the tested development platform and Linux is supported with per-user Un
 ## Language-specific caveats
 
 **Java**
-- Release validation is currently blocked on JDK 11: the suspended attach smoke misses its line breakpoint and the target exits before inspection. This occurs on both Linux/macOS CI and in an isolated Temurin 11 reproduction, including an unconditional breakpoint. Do not treat Java release readiness as verified.
-- On the separately exercised JDK 26 path, line breakpoints and inspection pass, but `break-fn Buggy.compute` returns `verified:false` even after the class is loaded. The full Java suite is not green.
+- The first `continue` after suspended attach sends `configurationDone` without a redundant second resume; line breakpoints can bind before execution advances.
+- Function-breakpoint verification now reflects the adapter response and is retained by `breaks`. Breakpoints initially pending before class load can still be reported pending after asynchronous binding; runtime binding and loaded-class verification are covered separately.
 - Compile with `javac -g` to get local variables — without `-g`, `locals` returns only `arg0/arg1/…` (JDWP limitation; `sl-dbg` will print a hint when it detects this).
 - `globals` returns no scope because the Java DAP doesn't expose statics as a scope. Use `sl-dbg eval ClassName.fieldName` (the `Hint` field on the response points at the current class).
 - Conditional breakpoints on a `for (...)` header line fire on loop init when the loop variable isn't yet in scope. Put the breakpoint on the body line for reliable conditions.

@@ -148,6 +148,8 @@ bin/sl-dbg daemon stop
 - **`parseLocation` distinguishes file paths from class names** by presence of `/`, `\`, or a known source extension. If your change makes `ComplexLoopDebug:14` get prepended with cwd, you've broken Java line breakpoints. There's no test for this — run the live Java e2e (`make test`) to catch it.
 - **`stopOnEntry` works via `WaitForStop(ctx, 5s)`** inside `handleStart`. Don't return the launch response before the entry pause arrives, or callers will see `state="initializing"` and race.
 - **Entry events can precede the launch response.** `WaitForStop` replays the current paused state with atomic waiter registration; execution/resume waiters must still wait for a new stop, not replay the previous one.
+- **Java `configurationDone` resumes a suspended attach.** The first Java continue must not send a second resume after deferred configuration; it can release a class-prepare suspension before breakpoints bind. Keep launch/subsequent-continue and Python/Go paths distinct.
+- **`FuncBPs()` returns a copy.** Use `UpdateFuncBP` to persist adapter IDs/verification; updating the returned slice does not update the session or the command's response.
 - **Schemas with `required: ["session"]`** would break the default-session UX. `session` is always optional.
 - **Bash quirk: `attach` appears in some SQL/keyword denylists** the agent runtime ships with; if a query fails, rephrase.
 

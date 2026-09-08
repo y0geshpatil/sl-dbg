@@ -50,13 +50,11 @@ and produces all four archives with a `-next` version. The CI snapshot job check
 the same contract on pull requests with read-only repository permissions.
 Run the Python, Go, and Java e2e suites as well; missing prerequisites are skips,
 not evidence of a successful language integration.
-The current Java suite has an unresolved function-breakpoint verification
-assertion (`Buggy.compute` stays unverified after class load). Do not suppress
-that failure or describe the full suite as passing.
-Release CI on JDK 11 also misses the earlier line breakpoint after suspended
-attach, causing the target to exit before inspection. Both platforms fail this
-gate; an isolated Temurin 11 reproduction also misses an unconditional
-breakpoint. **Do not merge/tag/publish around this failure.**
+The Java suite requires JDK 11 suspended attach to stop at its conditional line
+breakpoint, loaded-class function verification to persist and produce an actual
+function stop, and launched targets to stop on entry and successive line hits.
+These assertions caught a redundant initial Java resume and discarded function
+verification state; keep them as release gates. Do not publish around failures.
 
 ## Publish (maintainer action)
 

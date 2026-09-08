@@ -18,6 +18,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Fixed
 - Correct VS Code and Copilot CLI MCP registration paths/schemas, preserve existing configuration safely, propagate partial failures, and allow client-free uninstall.
 - Retain entry pauses that arrive before launch completes without replaying stale stops into subsequent resume operations.
+- Avoid a redundant initial Java resume after `configurationDone`, which could skip breakpoints during suspended attach on JDK 11.
+- Return and persist the adapter's function-breakpoint verification instead of discarding updates to a copied breakpoint list. Expanded regression coverage requires actual function hits on JDK 11 and JDK 26.
 - `daemon stop` no longer starts an absent daemon and waits for acknowledged shutdown. Long-lived MCP processes reap exited daemon children so an immediate restart can succeed.
 - Isolate smoke tests and MCP documentation generation from user daemons, caches, and configuration.
 
@@ -27,8 +29,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The older v0.5.4 release lacks the Java JAR. Its MCP registration and daemon lifecycle behavior also predates these fixes.
 
 ### Known limitations
-- Release is blocked by JDK 11 line-breakpoint failures after suspended attach on macOS/Linux CI; the target exits before inspection. An isolated Temurin 11 reproduction also misses an unconditional line breakpoint.
-- The Java smoke test observes `break-fn Buggy.compute` returning `verified:false` after the class is loaded. Line/conditional breakpoints and inspection work in the exercised flow; the full Java suite is not claimed to pass.
+- Breakpoints initially pending before class load may remain reported pending in `breaks` after asynchronous adapter binding; loaded-class function verification and actual runtime hits are covered by the expanded Java smoke.
 - Windows and Homebrew distribution are not supported. Checksums detect corrupted assets, not a compromised release publisher.
 
 ## Historical development notes

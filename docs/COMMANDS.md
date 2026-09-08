@@ -156,6 +156,9 @@ For Java, both `Class.method` and `Class#method` are accepted; the daemon
 translates the final `.` to `#` (the form java-debug requires internally) and
 strips any `(arg-types)` signature suffix. Fully-qualified class names
 (`pkg.sub.Class.method`) work the same way.
+The adapter's returned verification is persisted and shown by `breaks`.
+Initially pending breakpoints may still show pending after asynchronous class
+loading; this is distinct from immediate verification when a class is loaded.
 
 ### `sl-dbg break-ex <ExceptionType> [--uncaught | --caught | --all]`
 Exception breakpoint.
@@ -188,6 +191,9 @@ Run from start (after `start --stop-on-entry`).
 
 ### `sl-dbg continue` (alias: `c`)
 Resume until next pause.
+For the first Java resume after suspended attach, `configurationDone` is itself
+the resume operation; sl-dbg does not send a second `continue` that could skip a
+breakpoint during class preparation. Subsequent resumes behave normally.
 
 ### `sl-dbg step` (alias: `si`)
 Step into.

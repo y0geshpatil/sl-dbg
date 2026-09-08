@@ -95,6 +95,10 @@ OUT=$("$SLDBG" break-fn "Buggy.compute")
 contains "$OUT" '"function":"Buggy.compute"'
 contains "$OUT" '"verified":true'
 
+echo "== breaks retains function verification =="
+OUT=$("$SLDBG" breaks)
+contains "$OUT" '"function":"Buggy.compute"[^}]*"verified":true'
+
 echo "== watch --add =="
 OUT=$("$SLDBG" watch --add "item")
 contains "$OUT" '"result":"-1"'
@@ -107,7 +111,31 @@ echo "== source --around 3 =="
 OUT=$("$SLDBG" source --file "$SRC_DIR/Buggy.java" --line 24 --around 3)
 contains "$OUT" 'compute(item)'
 
+echo "== continue hits the verified function breakpoint =="
+OUT=$("$SLDBG" continue)
+contains "$OUT" '"reason":"function breakpoint"'
+OUT=$("$SLDBG" stack)
+contains "$OUT" 'Buggy.compute'
+
 echo "== stop =="
+"$SLDBG" stop >/dev/null
+
+echo "== launch with entry pause =="
+OUT=$("$SLDBG" start --lang java --main Buggy --classpath "$E2E_ROOT/classes" \
+  --cwd "$SRC_DIR" --source-root "$SRC_DIR" --stop-on-entry)
+contains "$OUT" '"state":"paused"'
+contains "$OUT" '"reason":"entry"'
+
+echo "== unconditional line breakpoint after launch =="
+OUT=$("$SLDBG" break "$SRC_DIR/Buggy.java":24)
+contains "$OUT" '"verified":true'
+for ITEM in 10 5; do
+  OUT=$("$SLDBG" continue)
+  contains "$OUT" '"reason":"breakpoint"'
+  contains "$OUT" '"line":24'
+  OUT=$("$SLDBG" eval "item")
+  contains "$OUT" "\"result\":\"$ITEM\""
+done
 "$SLDBG" stop >/dev/null
 
 if [[ $FAIL -gt 0 ]]; then
