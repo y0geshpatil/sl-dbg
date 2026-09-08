@@ -8,10 +8,6 @@ version: 2
 
 project_name: sl-dbg
 
-before:
-  hooks:
-    - go mod tidy
-
 builds:
   - id: sl-dbg
     main: ./cmd/sl-dbg
@@ -39,7 +35,7 @@ archives:
     files:
       - README.md
       - LICENSE
-      - docs/**/*
+      - docs/*.md
 
 checksum:
   name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
@@ -52,6 +48,7 @@ release:
     name: sl-dbg
   extra_files:
     - glob: adapters/java-launcher/target/sl-dbg-java-adapter.jar
+    - glob: adapters/java-launcher/target/sl-dbg-java-adapter.jar.sha256
 
 snapshot:
   version_template: "{{ incpatch .Version }}-next"
@@ -65,35 +62,3 @@ changelog:
       - '^chore:'
       - Merge pull request
       - Merge branch
-
-# Publish a Homebrew formula to a tap repo on each tagged release.
-# Set HOMEBREW_TAP_GITHUB_TOKEN in repo secrets to enable.
-# NOTE: `brews:` is deprecated and will be renamed to `homebrew_formulas:`
-# in GoReleaser v3 — keep `brews:` until we upgrade.
-brews:
-  - name: sl-dbg
-    description: "Stateless debugger CLI for AI agents and humans (DAP-backed)"
-    homepage: "https://github.com/y0geshpatil/sl-dbg"
-    license: "Apache-2.0"
-    repository:
-      owner: y0geshpatil
-      name: homebrew-sl-dbg
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
-    commit_author:
-      name: goreleaserbot
-      email: bot@goreleaser.com
-    directory: Formula
-    install: |
-      bin.install "sl-dbg"
-    test: |
-      assert_match "schema", shell_output("#{bin}/sl-dbg version")
-    dependencies:
-      - name: openjdk
-        type: optional
-      - name: python@3.11
-        type: optional
-    caveats: |
-      Language adapters are NOT bundled. After install run:
-        sl-dbg install-adapter all
-      to fetch / build them (debugpy via pip, dlv via go install,
-      Java adapter downloaded automatically — no Maven required).

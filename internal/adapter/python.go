@@ -1,36 +1,62 @@
 package adapter
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
+	"time"
 )
+
+// PythonPath resolves the target interpreter independently of the adapter venv.
+func PythonPath() (string, error) {
+	for _, name := range []string{"python3", "python"} {
+		if py, err := exec.LookPath(name); err == nil {
+			return py, nil
+		}
+	}
+	return "", fmt.Errorf("Python 3 not found in PATH")
+}
+
+func PythonVenvDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".cache", "sl-dbg", "adapters", "python"), nil
+}
+
+func PythonAdapterPath() (string, error) {
+	var candidates []string
+	if dir, err := PythonVenvDir(); err == nil {
+		candidates = append(candidates, filepath.Join(dir, "bin", "python"))
+	}
+	for _, name := range []string{"python3", "python"} {
+		if py, err := exec.LookPath(name); err == nil {
+			candidates = append(candidates, py)
+		}
+	}
+	for _, py := range candidates {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := exec.CommandContext(ctx, py, "-c", "import sys; assert sys.version_info[0] == 3; import debugpy").Run()
+		cancel()
+		if err == nil {
+			return py, nil
+		}
+	}
+	return "", fmt.Errorf("debugpy not importable; run `sl-dbg install-adapter python`")
+}
 
 func init() {
 	Register(Spec{
 		Lang:      "python",
 		AdapterID: "debugpy",
-		Detect: func() (string, error) {
-			py, err := exec.LookPath("python3")
-			if err != nil {
-				py, err = exec.LookPath("python")
-				if err != nil {
-					return "", fmt.Errorf("python not found in PATH")
-				}
-			}
-			// Probe: python -c "import debugpy"
-			cmd := exec.Command(py, "-c", "import debugpy")
-			if out, err := cmd.CombinedOutput(); err != nil {
-				return "", fmt.Errorf("debugpy not importable from %s: %s", py, string(out))
-			}
-			return py, nil
-		},
+		Detect:    PythonAdapterPath,
 		LaunchAdapter: func() ([]string, Transport, error) {
-			py, err := exec.LookPath("python3")
+			py, err := PythonAdapterPath()
 			if err != nil {
-				py, err = exec.LookPath("python")
-				if err != nil {
-					return nil, TransportStdio, err
-				}
+				return nil, TransportStdio, err
 			}
 			return []string{py, "-m", "debugpy.adapter"}, TransportStdio, nil
 		},
@@ -38,9 +64,9 @@ func init() {
 			if cfg.Program == "" {
 				return nil, fmt.Errorf("python launch requires --program")
 			}
-			py, _ := exec.LookPath("python3")
-			if py == "" {
-				py, _ = exec.LookPath("python")
+			py, err := PythonPath()
+			if err != nil {
+				return nil, err
 			}
 			args := map[string]interface{}{
 				"name":        "sl-dbg launch",
@@ -91,7 +117,7 @@ func init() {
 			}
 			return args, nil
 		},
-		InstallHint: "pip install --user debugpy",
+		InstallHint: "Run `sl-dbg install-adapter python` (installs debugpy in an isolated virtual environment).",
 	})
 }
 

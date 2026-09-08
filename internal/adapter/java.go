@@ -1,6 +1,7 @@
 package adapter
 
 import (
+	"archive/zip"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,9 +13,9 @@ import (
 // Eclipse JDT-LS).
 //
 // Jar resolution order:
-//   1. $SL_DBG_JAVA_DEBUG_JAR
-//   2. ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar (installed)
-//   3. <repo>/adapters/java-launcher/target/sl-dbg-java-adapter.jar (dev build)
+//  1. $SL_DBG_JAVA_DEBUG_JAR
+//  2. ~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar (installed)
+//  3. <repo>/adapters/java-launcher/target/sl-dbg-java-adapter.jar (dev build)
 func init() {
 	Register(Spec{
 		Lang:      "java",
@@ -27,8 +28,8 @@ func init() {
 			if _, err := exec.LookPath("java"); err != nil {
 				return "", fmt.Errorf("`java` not in PATH")
 			}
-			if _, err := os.Stat(jar); err != nil {
-				return "", fmt.Errorf("jar missing at %s: %w", jar, err)
+			if err := ValidateJavaJar(jar); err != nil {
+				return "", err
 			}
 			return jar, nil
 		},
@@ -36,6 +37,9 @@ func init() {
 			jar := javaDebugJarPath()
 			if jar == "" {
 				return nil, TransportTCPListen, fmt.Errorf("sl-dbg java adapter jar not configured")
+			}
+			if err := ValidateJavaJar(jar); err != nil {
+				return nil, TransportTCPListen, err
 			}
 			java, err := exec.LookPath("java")
 			if err != nil {
@@ -99,6 +103,20 @@ func init() {
 		InstallHint: "Run `sl-dbg install-adapter java` to download and install the adapter automatically (no Maven required). " +
 			"Override the jar location with SL_DBG_JAVA_DEBUG_JAR.",
 	})
+}
+
+func ValidateJavaJar(path string) error {
+	archive, err := zip.OpenReader(path)
+	if err != nil {
+		return fmt.Errorf("invalid Java adapter jar at %s: %w", path, err)
+	}
+	defer archive.Close()
+	for _, entry := range archive.File {
+		if entry.Name == "META-INF/MANIFEST.MF" && entry.UncompressedSize64 > 0 {
+			return nil
+		}
+	}
+	return fmt.Errorf("invalid Java adapter jar at %s: missing manifest", path)
 }
 
 func javaDebugJarPath() string {

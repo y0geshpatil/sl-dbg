@@ -141,9 +141,13 @@ bin/sl-dbg daemon stop
 
 - **Don't run `pkill`, `killall`, or `kill $VAR`** in shell commands — the agent runtime blocks them. Use literal numeric PIDs: `kill 12345`. To stop the daemon, prefer `bin/sl-dbg daemon stop`.
 - **Daemon is sticky.** After rebuilding, the *old* daemon keeps serving until you stop it. `make build` does NOT restart the daemon for you.
+- **Isolate smoke tests.** Use a short temporary `SL_DBG_SOCKET` and temporary HOME/config paths; never stop a user's default daemon during installation validation. The e2e scripts isolate their own sockets.
+- **Installer environment belongs to Bash.** In a pipeline use `curl ... | INSTALL_DIR="$HOME/bin" bash`, not `INSTALL_DIR=... curl ... | bash`. The default install location is `~/.local/bin`; no automatic sudo or daemon stop.
+- **Release Java assets are a pair.** Publish `sl-dbg-java-adapter.jar` and `sl-dbg-java-adapter.jar.sha256` under the binary's version tag. The sidecar is separate from GoReleaser's archive checksum manifest; `make java-adapter` generates it.
 - **Java adapter jar is cached** at `~/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar`. Edits to `adapters/java-launcher/**/*.java` require `make java-adapter` to take effect.
 - **`parseLocation` distinguishes file paths from class names** by presence of `/`, `\`, or a known source extension. If your change makes `ComplexLoopDebug:14` get prepended with cwd, you've broken Java line breakpoints. There's no test for this — run the live Java e2e (`make test`) to catch it.
 - **`stopOnEntry` works via `WaitForStop(ctx, 5s)`** inside `handleStart`. Don't return the launch response before the entry pause arrives, or callers will see `state="initializing"` and race.
+- **Entry events can precede the launch response.** `WaitForStop` replays the current paused state with atomic waiter registration; execution/resume waiters must still wait for a new stop, not replay the previous one.
 - **Schemas with `required: ["session"]`** would break the default-session UX. `session` is always optional.
 - **Bash quirk: `attach` appears in some SQL/keyword denylists** the agent runtime ships with; if a query fails, rephrase.
 

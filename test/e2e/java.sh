@@ -13,44 +13,57 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/../.." && pwd)"
 SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
-# eval/set/watch/conditional-bp are default-denied on the daemon (#54); enable for tests.
-export SL_DBG_ALLOW_EVAL="${SL_DBG_ALLOW_EVAL:-1}"
 
 if ! command -v java >/dev/null 2>&1; then
   echo "SKIP: java not on PATH" >&2; exit 77
 fi
-if [[ ! -f "$HOME/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar" ]]; then
+if ! command -v javac >/dev/null 2>&1; then
+  echo "SKIP: javac not on PATH (install a JDK)" >&2; exit 77
+fi
+JAVA_JAR="${SL_DBG_JAVA_DEBUG_JAR:-$HOME/.cache/sl-dbg/adapters/sl-dbg-java-adapter.jar}"
+if [[ ! -f "$JAVA_JAR" ]]; then
   echo "SKIP: java adapter not installed (run: sl-dbg install-adapter java)" >&2; exit 77
 fi
 if [[ ! -x "$SLDBG" ]]; then
   echo "SKIP: sl-dbg not built at $SLDBG" >&2; exit 77
 fi
 
+JAVA_JAR="$(cd "$(dirname "$JAVA_JAR")" && pwd)/$(basename "$JAVA_JAR")"
+source "$SCRIPT_DIR/common.sh"
+e2e_isolate
+export SL_DBG_JAVA_DEBUG_JAR="$JAVA_JAR"
+
 FAIL=0
 fail() { echo "FAIL: $*" >&2; FAIL=$((FAIL+1)); }
 contains() { echo "$1" | grep -q "$2" || fail "expected $2 in: $1"; }
 
-PORT=${SL_DBG_E2E_PORT:-15005}
-SRC_DIR="$REPO/examples/java"
-cd "$SRC_DIR"
-javac -g Buggy.java 2>/dev/null || true
+SRC_DIR="$E2E_ROOT/source"
+mkdir "$SRC_DIR" "$E2E_ROOT/classes"
+cp "$REPO/examples/java/Buggy.java" "$SRC_DIR/Buggy.java"
+javac -g -d "$E2E_ROOT/classes" "$SRC_DIR/Buggy.java"
 
 # Start suspended JVM in background.
-java -agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:$PORT \
-  -cp . Buggy >/tmp/sl-dbg-java-e2e.out 2>&1 &
+JVM_LOG="$E2E_ROOT/jvm.log"
+java -agentlib:jdwp=transport=dt_socket,server=y,suspend=y,address=127.0.0.1:0 \
+  -cp "$E2E_ROOT/classes" Buggy >"$JVM_LOG" 2>&1 &
 JVM_PID=$!
-trap 'kill -9 $JVM_PID 2>/dev/null || true; rm -f $SRC_DIR/*.class' EXIT
 
-# Wait for port.
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if nc -z 127.0.0.1 $PORT 2>/dev/null; then break; fi
-  sleep 0.3
+# JDWP reports its kernel-assigned port; probing it with nc consumes a handshake.
+PORT=""
+for _ in {1..100}; do
+  PORT=$(sed -n 's/^Listening for transport dt_socket at address: \([0-9][0-9]*\).*$/\1/p' "$JVM_LOG" | head -n 1)
+  [[ -n "$PORT" ]] && break
+  kill -0 "$JVM_PID" 2>/dev/null || break
+  sleep 0.1
 done
-
-"$SLDBG" stop 2>/dev/null || true
+if [[ -z "$PORT" ]]; then
+  echo "FAIL: JVM did not report a JDWP port" >&2
+  cat "$JVM_LOG" >&2
+  exit 1
+fi
 
 echo "== attach =="
-OUT=$("$SLDBG" attach --lang java --host 127.0.0.1 --port $PORT --source-root "$SRC_DIR")
+OUT=$("$SLDBG" attach --lang java --host 127.0.0.1 --port "$PORT" --source-root "$SRC_DIR")
 contains "$OUT" '"reason":"attached"'
 
 echo "== conditional break =="

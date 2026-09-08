@@ -1,153 +1,116 @@
 #!/usr/bin/env bash
-# sl-dbg installer — fetches the latest tagged release binary for the
-# current OS/arch from y0geshpatil/sl-dbg's Releases tab and drops it on
-# $PATH. No authentication needed; Apache-2.0.
-#
-# Usage:
-#   curl -fsSL https://sl-dbg.dev/install.sh | bash
-#
-# Pin a version:
-#   curl -fsSL https://sl-dbg.dev/install.sh | bash -s -- v0.3.0
-#
-# Override install dir (no sudo needed if you own the dir):
-#   INSTALL_DIR=$HOME/.local/bin curl -fsSL https://sl-dbg.dev/install.sh | bash
-#
-# Why a script and not just `go install`? Most users don't have a Go
-# toolchain. This pulls the prebuilt tarball produced by goreleaser so the
-# install completes in seconds with no compiler dependency.
+# Download a checksum-verified release. No shell profiles or MCP configs are changed.
+# curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
+# curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | INSTALL_DIR="$HOME/bin" bash -s -- v0.5.4
 set -euo pipefail
 
 REPO="y0geshpatil/sl-dbg"
 BINARY="sl-dbg"
-INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
+INSTALL_DIR="${INSTALL_DIR:-${HOME:?HOME must be set}/.local/bin}"
 VERSION="${1:-latest}"
+tmp=""
+staged=""
 
 die() { echo "error: $*" >&2; exit 1; }
-
-detect_os() {
-  case "$(uname -s)" in
-    Darwin) echo darwin ;;
-    Linux)  echo linux ;;
-    *)      die "unsupported OS: $(uname -s) — sl-dbg ships darwin + linux only" ;;
-  esac
+cleanup() {
+  [ -z "$staged" ] || rm -f "$staged"
+  [ -z "$tmp" ] || rm -rf "$tmp"
 }
-detect_arch() {
-  case "$(uname -m)" in
-    x86_64|amd64) echo amd64 ;;
-    arm64|aarch64) echo arm64 ;;
-    *) die "unsupported arch: $(uname -m)" ;;
-  esac
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+[ "$#" -le 1 ] || die "usage: install.sh [latest|vVERSION]"
+case "$INSTALL_DIR" in /*) ;; *) die "INSTALL_DIR must be an absolute path" ;; esac
+[ "${INSTALL_SKIP_VERIFY:-0}" != 1 ] || die "INSTALL_SKIP_VERIFY is no longer supported; release checksums are required"
+for tool in curl tar mktemp install awk; do
+  command -v "$tool" >/dev/null 2>&1 || die "required tool '$tool' is missing; install it and retry"
+done
+if command -v sha256sum >/dev/null 2>&1; then
+  sha256() { sha256sum "$1" | awk '{print $1}'; }
+elif command -v shasum >/dev/null 2>&1; then
+  sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+else
+  die "install sha256sum (coreutils) or shasum (Perl) to verify downloads"
+fi
+
+case "$(uname -s)" in
+  Darwin) OS=darwin ;;
+  Linux) OS=linux ;;
+  *) die "unsupported OS: $(uname -s); releases support macOS and Linux only" ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=amd64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *) die "unsupported architecture: $(uname -m); releases support amd64 and arm64 only" ;;
+esac
+
+fetch() {
+  curl --fail --show-error --silent --location --proto '=https' --proto-redir '=https' \
+    --connect-timeout 15 --max-time 180 --retry 3 --output "$2" "$1"
 }
-
-OS="$(detect_os)"
-ARCH="$(detect_arch)"
-
-# Resolve "latest" to a concrete tag. Use the public API (no auth needed
-# for public repos). We avoid jq by grep+sed on the JSON.
-resolve_version() {
-  if [ "$VERSION" != "latest" ]; then
-    echo "$VERSION"
-    return
-  fi
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-    | grep -m1 '"tag_name"' \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
-}
-
-VERSION="$(resolve_version)"
-[ -n "$VERSION" ] || die "could not resolve latest version (no releases published yet?)"
-
-# goreleaser archive: sl-dbg_<version-no-v>_<os>_<arch>.tar.gz
-VER_NO_V="${VERSION#v}"
-ARCHIVE="${BINARY}_${VER_NO_V}_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE}"
-
-echo "==> sl-dbg ${VERSION} (${OS}/${ARCH})"
-echo "==> downloading ${URL}"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
-
-curl -fsSL "$URL" -o "${tmp}/${ARCHIVE}" \
-  || die "download failed — check that ${VERSION} exists at https://github.com/${REPO}/releases"
-
-# Verify the SHA-256 checksum against the release-published manifest.
-# goreleaser publishes <archive-base>_checksums.txt for every release; we
-# refuse to install if the file is missing or the hash doesn't match.
-# Issue #68.
+if [ "$VERSION" = latest ]; then
+  fetch "https://api.github.com/repos/${REPO}/releases/latest" "$tmp/release.json" \
+    || die "could not resolve latest release; check connectivity/API rate limits, or pass an explicit vVERSION from https://github.com/${REPO}/releases"
+  VERSION="$(sed -nE 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$tmp/release.json")"
+fi
+[[ "$VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]] \
+  || die "invalid release version '$VERSION'; expected vMAJOR.MINOR.PATCH (optional prerelease)"
+VER_NO_V="${VERSION#v}"
+VERSION="v${VER_NO_V}"
+ARCHIVE="${BINARY}_${VER_NO_V}_${OS}_${ARCH}.tar.gz"
 CHECKSUMS="${BINARY}_${VER_NO_V}_checksums.txt"
-CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/${CHECKSUMS}"
-echo "==> verifying SHA-256 against ${CHECKSUMS_URL}"
-if [ "${INSTALL_SKIP_VERIFY:-0}" = "1" ]; then
-  echo "==> WARNING: INSTALL_SKIP_VERIFY=1 set; skipping checksum verification"
-elif curl -fsSL "$CHECKSUMS_URL" -o "${tmp}/${CHECKSUMS}"; then
-  expected="$(awk -v a="${ARCHIVE}" '$2==a{print $1}' "${tmp}/${CHECKSUMS}")"
-  if [ -z "$expected" ]; then
-    die "checksum for ${ARCHIVE} not present in ${CHECKSUMS}; refusing to install"
-  fi
-  if command -v sha256sum >/dev/null 2>&1; then
-    actual="$(sha256sum "${tmp}/${ARCHIVE}" | awk '{print $1}')"
-  elif command -v shasum >/dev/null 2>&1; then
-    actual="$(shasum -a 256 "${tmp}/${ARCHIVE}" | awk '{print $1}')"
-  else
-    die "neither sha256sum nor shasum available — cannot verify download"
-  fi
-  if [ "$expected" != "$actual" ]; then
-    die "SHA-256 mismatch for ${ARCHIVE}: expected ${expected}, got ${actual}"
-  fi
-  echo "==> SHA-256 OK"
-else
-  die "could not fetch ${CHECKSUMS_URL}; refusing to install unverified binary (set INSTALL_SKIP_VERIFY=1 to override, NOT recommended)"
+BASE_URL="https://github.com/${REPO}/releases/download/${VERSION}"
+
+echo "==> sl-dbg ${VERSION} (${OS}/${ARCH})"
+fetch "${BASE_URL}/${ARCHIVE}" "${tmp}/${ARCHIVE}" \
+  || die "could not download ${ARCHIVE}; check connectivity and assets at https://github.com/${REPO}/releases/tag/${VERSION}"
+fetch "${BASE_URL}/${CHECKSUMS}" "${tmp}/${CHECKSUMS}" \
+  || die "could not download ${CHECKSUMS}; refusing to install an unverified binary"
+expected="$(awk -v a="$ARCHIVE" '$2==a{print $1}' "${tmp}/${CHECKSUMS}")"
+[[ "$expected" =~ ^[0-9a-fA-F]{64}$ ]] \
+  || die "expected exactly one SHA-256 for ${ARCHIVE} in ${CHECKSUMS}"
+actual="$(sha256 "${tmp}/${ARCHIVE}")"
+[ "$(printf '%s' "$expected" | tr 'A-F' 'a-f')" = "$actual" ] \
+  || die "SHA-256 mismatch for ${ARCHIVE}; existing installation unchanged"
+
+# Extract only the expected binary, not arbitrary archive paths.
+tar -xzf "${tmp}/${ARCHIVE}" -C "$tmp" "$BINARY" \
+  || die "release archive does not contain ${BINARY}"
+[ -f "${tmp}/${BINARY}" ] && [ ! -L "${tmp}/${BINARY}" ] \
+  || die "release binary is not a regular file"
+chmod 0755 "${tmp}/${BINARY}"
+"${tmp}/${BINARY}" version || die "downloaded binary cannot run on this machine; existing installation unchanged"
+mkdir -p "$INSTALL_DIR" || die "cannot create ${INSTALL_DIR}; choose a writable INSTALL_DIR"
+[ -w "$INSTALL_DIR" ] || die "cannot write to ${INSTALL_DIR}; choose a user-owned INSTALL_DIR (no automatic sudo)"
+[ ! -d "${INSTALL_DIR}/${BINARY}" ] || die "${INSTALL_DIR}/${BINARY} is a directory; refusing to replace it"
+staged="$(mktemp "${INSTALL_DIR}/.sl-dbg.XXXXXX")"
+install -m 0755 "${tmp}/${BINARY}" "$staged"
+mv -f "$staged" "${INSTALL_DIR}/${BINARY}"
+staged=""
+
+echo "==> installed ${INSTALL_DIR}/${BINARY}"
+case ":${PATH:-}:" in
+  *":${INSTALL_DIR}:"*) ;;
+  *) printf 'Add this to your shell profile, then restart your terminal:\n  export PATH=%q:"$PATH"\n' "$INSTALL_DIR" ;;
+esac
+resolved="$(command -v sl-dbg || true)"
+if [ -n "$resolved" ] && [ "$resolved" != "${INSTALL_DIR}/${BINARY}" ]; then
+  echo "warning: PATH currently resolves sl-dbg to $resolved; put $INSTALL_DIR first" >&2
 fi
-
-tar -xzf "${tmp}/${ARCHIVE}" -C "$tmp"
-
-if [ -w "$INSTALL_DIR" ]; then
-  install -m 0755 "${tmp}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-elif command -v sudo >/dev/null 2>&1; then
-  echo "==> ${INSTALL_DIR} is not writable; using sudo"
-  sudo install -m 0755 "${tmp}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-else
-  die "cannot write to ${INSTALL_DIR} and sudo is unavailable — set INSTALL_DIR=~/.local/bin"
-fi
-
-echo "==> installed $(${INSTALL_DIR}/${BINARY} version 2>/dev/null || echo "${BINARY} ${VERSION}")"
 cat <<EOF
 
-Next steps:
-  1. Make sure ${INSTALL_DIR} is on your PATH.
+Next:
+  "${INSTALL_DIR}/${BINARY}" install-adapter python   # or go / java
+  "${INSTALL_DIR}/${BINARY}" adapters
+  "${INSTALL_DIR}/${BINARY}" mcp install --print      # preview client registration
 
-  2. Install language adapters you need:
-       sl-dbg install-adapter python   # debugpy via pip
-       sl-dbg install-adapter go       # dlv via go install
-       sl-dbg install-adapter java     # downloads pre-built jar automatically (no Maven needed)
+Upgrading? Existing daemons and MCP clients keep running the old code.
+Finish active debug sessions, run "${INSTALL_DIR}/${BINARY}" daemon stop,
+then restart your MCP client. The installer never interrupts debug sessions.
 
-  3. Register sl-dbg with your AI agent (one-shot, edits the agent's config):
-       sl-dbg mcp install claude       # Claude Desktop
-       sl-dbg mcp install cursor       # Cursor
-       sl-dbg mcp install vscode       # ./.vscode/mcp.json (workspace-scoped)
-       sl-dbg mcp install codex        # Codex CLI (~/.codex/config.toml)
-       sl-dbg mcp install copilot      # GitHub Copilot CLI
-       sl-dbg mcp install all          # every agent detected on this machine
-       sl-dbg mcp install --print      # just print the snippet, do not touch files
-     (Add --dry-run to preview, --force to overwrite an existing entry.
-      A timestamped .bak of any existing config is written before the update.)
-
-     Secure-by-default (issue #70): the registered command runs
-     'sl-dbg mcp --safe' and the daemon auto-discovers a tight program
-     allowlist from PATH (java, python3, node, dlv). The source jail is on,
-     eval is off, session cap is on, audit log is on. To restrict which
-     binaries debug_start may spawn, re-run with explicit allowlist entries:
-       sl-dbg mcp install claude --allow-program /path/to/your/program
-     Hide every mutating tool from the agent with:
-       sl-dbg mcp install claude --read-only
-     (--insecure restores the legacy permissive mode; NOT recommended.)
-
-  4. Try it:
-       sl-dbg start --lang python --program <your-script.py> --stop-on-entry
-
-  Docs: https://y0geshpatil.github.io/sl-dbg-site/
-
-To uninstall later:
-  curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash
+Docs: https://y0geshpatil.github.io/sl-dbg-site/
+Uninstall using the same INSTALL_DIR with scripts/uninstall.sh.
 EOF

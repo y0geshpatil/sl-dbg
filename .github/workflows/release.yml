@@ -18,7 +18,10 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version-file: go.mod
+
+      - name: Test before publishing
+        run: go test ./...
 
       - uses: actions/setup-java@v4
         with:
@@ -26,19 +29,13 @@ jobs:
           java-version: '11'
 
       - name: Build Java adapter jar
-        run: cd adapters/java-launcher && mvn -q -DskipTests package
+        run: make java-adapter
 
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
-          version: '~> v2'
-          # Skip the Homebrew tap step until y0geshpatil/homebrew-sl-dbg
-          # exists and HOMEBREW_TAP_GITHUB_TOKEN is populated. Drop the
-          # --skip flag once the tap is set up.
-          args: release --clean --skip=homebrew
+          version: v2.16.0
+          args: release --clean
         env:
           # Uses the built-in GITHUB_TOKEN — release publishes to this same repo.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Personal access token with `repo` scope on the homebrew-sl-dbg tap.
-          # Required only for the brew publishing step.
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

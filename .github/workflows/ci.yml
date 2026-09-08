@@ -4,6 +4,9 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     name: Go ${{ matrix.go-version }} on ${{ matrix.os }}
@@ -36,18 +39,15 @@ jobs:
       - name: Build CLI for e2e
         run: go build -o bin/sl-dbg ./cmd/sl-dbg
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Run Python and Go e2e smoke tests
         shell: bash
         run: |
-          if ! compgen -G 'test/e2e/*.sh' >/dev/null; then
-            echo 'No e2e shell tests found; skipping.'
-            exit 0
-          fi
-          if ! python3 --version; then
-            echo 'python3 unavailable; skipping e2e smoke tests.'
-            exit 0
-          fi
-          python3 -m pip install --user debugpy
+          ./bin/sl-dbg install-adapter python
+          export PATH="$HOME/.cache/sl-dbg/adapters/python/bin:$PATH"
           go install github.com/go-delve/delve/cmd/dlv@latest
           export PATH="$(go env GOPATH)/bin:$PATH"
           bash test/e2e/python.sh
@@ -68,3 +68,28 @@ jobs:
           # Maven is pre-installed on ubuntu-latest and macos-latest runners.
           ./bin/sl-dbg install-adapter java
           bash test/e2e/java.sh
+
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '11'
+      - run: make java-adapter
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.16.0
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.16.0
+          args: release --snapshot --clean
+      - name: Verify complete release artifacts
+        run: bash scripts/verify-release.sh dist adapters/java-launcher/target

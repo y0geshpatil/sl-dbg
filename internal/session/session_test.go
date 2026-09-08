@@ -1,8 +1,82 @@
 package session
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
+
+	godap "github.com/google/go-dap"
 )
+
+func TestWaitForStopReplaysEntryWithoutReplayingResumeWaiter(t *testing.T) {
+	s := &Session{}
+	s.handleEvent(&godap.StoppedEvent{Body: godap.StoppedEventBody{Reason: "entry", ThreadId: 7}})
+	pi, err := s.WaitForStop(context.Background(), time.Second)
+	if err != nil || pi.State != "paused" || pi.Reason != "entry" || pi.Thread != 7 {
+		t.Fatalf("early entry event lost: %+v, %v", pi, err)
+	}
+	resume := s.installWaiter()
+	select {
+	case ev := <-resume:
+		t.Fatalf("resume waiter replayed previous pause: %+v", ev)
+	default:
+	}
+	s.handleEvent(&godap.ContinuedEvent{})
+	s.handleEvent(&godap.StoppedEvent{Body: godap.StoppedEventBody{Reason: "breakpoint", ThreadId: 8}})
+	if ev := <-resume; ev.reason != "breakpoint" || ev.threadID != 8 {
+		t.Fatalf("resume waiter missed new pause: %+v", ev)
+	}
+}
+
+func TestWaitForStopConcurrentEntry(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		s := &Session{state: StateRunning}
+		var done sync.WaitGroup
+		done.Add(1)
+		go func() {
+			defer done.Done()
+			s.handleEvent(&godap.StoppedEvent{Body: godap.StoppedEventBody{Reason: "entry", ThreadId: 1}})
+		}()
+		pi, err := s.WaitForStop(context.Background(), time.Second)
+		if err != nil || pi.State != "paused" || pi.Reason != "entry" {
+			t.Fatalf("concurrent entry lost: %+v, %v", pi, err)
+		}
+		resume := s.installWaiter()
+		done.Wait()
+		select {
+		case ev := <-resume:
+			t.Fatalf("old event reached new resume waiter: %+v", ev)
+		default:
+		}
+	}
+}
+
+func TestWaitForStopTerminalTimeoutAndCancellation(t *testing.T) {
+	s := &Session{}
+	s.handleEvent(&godap.StoppedEvent{Body: godap.StoppedEventBody{Reason: "entry", ThreadId: 1}})
+	s.handleEvent(&godap.ContinuedEvent{})
+	pi, err := s.WaitForStop(context.Background(), time.Millisecond)
+	if err != nil || pi.Reason != "timeout" || pi.State != "running" {
+		t.Fatalf("stale pause after continue: %+v, %v", pi, err)
+	}
+	if len(s.waiters) != 0 {
+		t.Fatal("timeout leaked waiter")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := s.WaitForStop(ctx, time.Second); err != context.Canceled {
+		t.Fatalf("cancellation: %v", err)
+	}
+	if len(s.waiters) != 0 {
+		t.Fatal("cancellation leaked waiter")
+	}
+	s.handleEvent(&godap.ExitedEvent{Body: godap.ExitedEventBody{ExitCode: 0}})
+	pi, err = s.WaitForStop(context.Background(), time.Second)
+	if err != nil || pi.State != "exited" || pi.ExitCode == nil || *pi.ExitCode != 0 {
+		t.Fatalf("terminal state lost: %+v, %v", pi, err)
+	}
+}
 
 func TestBPLifecycle(t *testing.T) {
 	s := &Session{ID: "test", bpsByID: map[int]*BP{}}

@@ -9,11 +9,10 @@
 `sl-dbg` is a thin, JSON-first command-line wrapper around the [Debug Adapter Protocol (DAP)](https://microsoft.github.io/debug-adapter-protocol/). Where traditional debuggers (`gdb`, `pdb`, `jdb`) drop you into an interactive REPL, `sl-dbg` exposes every debugger operation as a **standalone shell command** with structured JSON output.
 
 ```bash
-sl-dbg start --lang python --program ./app.py
-sl-dbg break app.py:42 --if "user.id == 5"
+sl-dbg start --lang python --program ./app.py --stop-on-entry
+sl-dbg break app.py:42
 sl-dbg continue          # blocks; returns JSON when paused
 sl-dbg locals            # → {"user": {...}, "items": [...]}
-sl-dbg eval "len(items)" # → {"result": 4, "type": "int"}
 sl-dbg step
 sl-dbg stack
 sl-dbg stop
@@ -25,15 +24,19 @@ That's it. No REPL. No protocol. Just commands.
 
 `sl-dbg` is a single static Go binary with an embedded daemon and MCP server. macOS + Linux are first-class; Windows is out of scope.
 
-| Language | Adapter | Install | E2E verified |
+| Language | Adapter | Install | Smoke coverage |
 |---|---|---|---|
-| Python | `debugpy` (Microsoft) | `pip install --user debugpy` | ✅ |
-| Go | `dlv dap` (Delve) | `go install github.com/go-delve/delve/cmd/dlv@latest` | ✅ |
-| Java | `java-debug` (Microsoft, embedded launcher) | `sl-dbg install-adapter java` | ✅ |
-| Node.js, Rust, C/C++, .NET | planned | each lands via `sl-dbg install-adapter <lang>` | ⏳ |
+| Python | `debugpy` (Microsoft) | `sl-dbg install-adapter python` | ✅ |
+| Go | `dlv dap` (Delve) | `sl-dbg install-adapter go` | ✅ |
+| Java | `java-debug` (Microsoft, embedded launcher) | `sl-dbg install-adapter java` | Launch/attach and inspection; function-breakpoint limitation below |
 
 ### Why is Java different?
-Of all mainstream languages, Java is the **only** one whose official DAP adapter (Microsoft's `java-debug`) does not ship as a standalone runnable. It's an OSGi bundle meant to be loaded inside Eclipse JDT-LS. The clean fix — implemented like every other professional DAP tool (CodeLLDB, netcoredbg, Delve) — is for the `sl-dbg` project to publish a small Java launcher fat-jar via GitHub Releases, fetched on demand by `sl-dbg install-adapter java`. That work is tracked in `ROADMAP.md`. No user-facing build-from-source step.
+Microsoft's `java-debug` needs a standalone launcher outside an IDE. This
+repository builds that launcher in `adapters/java-launcher`; complete releases
+include `sl-dbg-java-adapter.jar` and its SHA-256 sidecar. Released binaries fetch
+the adapter from their matching release; end users need JDK 11+, not Maven.
+**The existing v0.5.4 release lacks the Java JAR.** Until a complete release is
+published, use the [documented source build](docs/ADAPTERS.md) for Java.
 
 ## Why?
 
@@ -47,42 +50,46 @@ Of all mainstream languages, Java is the **only** one whose official DAP adapter
 ## Features
 
 - 🎯 **One command, one action** — fully stateless UX, JSON in & out
-- 🌐 **Multi-language** — Python, Java, Go, Node.js, C/C++, Rust, .NET (via DAP adapters)
+- 🌐 **Multi-language** — Python, Java and Go via DAP adapters
 - 🔌 **Launch or attach** — start a fresh process or attach to a running one (host:port or PID)
-- 🎚️ **Full breakpoint suite** — line, conditional, hit-count, logpoint, function, exception, data
+- 🎚️ **Breakpoint controls** — line, conditional, hit-count, logpoint, function, exception (adapter-dependent)
 - 🔍 **Deep inspection** — call stack, locals, globals, expression evaluation, modify variables
 - 🤖 **MCP-ready** — `sl-dbg mcp` exposes all commands as MCP tools for AI agents
 - 📦 **Single static binary** — no runtime dependencies for `sl-dbg` itself
-- 🔒 **Production-safe** — `--read-only` mode forbids state mutation; SSH-tunnel friendly
+- 🔒 **Explicit safety controls** — `--read-only` refuses debugger mutations; evaluation is disabled by default. Debugging is not a sandbox.
 
 ## Quick Start
 
 ### Install
 
-Pick the method that fits your environment. Release artifacts are
-attached to every tag on the [GitHub Releases tab](https://github.com/y0geshpatil/sl-dbg/releases) — no authentication required.
+macOS or Linux, amd64 or arm64. No Go compiler is needed for the binary.
+The installer uses HTTPS and mandatory release SHA-256 checksums, installs to
+`~/.local/bin` without sudo, and leaves shell profiles and MCP configs unchanged.
+It needs Bash, curl, tar, and `sha256sum` or `shasum`.
 
 ```bash
-# 1. Universal curl one-liner (recommended — no Go toolchain needed):
+# Install the latest published release:
 curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
+export PATH="$HOME/.local/bin:$PATH"
+sl-dbg version
 
-# 2. Pin a specific version:
-curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash -s -- v0.1.0
+# Pin a release (choose a version from the Releases page):
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash -s -- v0.5.4
 
-# 3. Install to a per-user dir (no sudo):
-INSTALL_DIR=$HOME/.local/bin \
-  curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | bash
-
-# 4. Direct download — grab any .tar.gz from:
-#   https://github.com/y0geshpatil/sl-dbg/releases
-# Then: tar -xzf sl-dbg_*.tar.gz && mv sl-dbg /usr/local/bin/
+# Choose a different user-owned directory (the variable belongs on bash, not curl):
+curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/install.sh | INSTALL_DIR="$HOME/bin" bash
 ```
+
+Persist the PATH line in your shell profile; see [platform setup](docs/PLATFORMS.md).
+For inspection before execution, download `install.sh` to a file, read it, then
+run `bash install.sh`. Checksums detect corrupted assets; they are not signatures
+and do not independently authenticate a compromised release account.
 
 After installing the binary, install the language adapters you actually
 need (none are bundled — they live in their respective ecosystems):
 
 ```bash
-sl-dbg install-adapter all              # python (debugpy) + go (dlv) + java (launcher jar)
+sl-dbg install-adapter all              # attempts all three; errors if any installation fails
 sl-dbg install-adapter python           # just debugpy
 sl-dbg install-adapter go               # just dlv
 sl-dbg install-adapter java             # just the embedded Java DAP launcher
@@ -95,23 +102,26 @@ See [docs/RELEASING.md](docs/RELEASING.md) for the cut-a-release playbook.
 
 ### Debug a Python script
 ```bash
-sl-dbg start --lang python --program ./app.py
-# → {"ok":true,"session":"a1b2","state":"paused","location":{"file":"app.py","line":1}}
-
-sl-dbg break app.py:42
+printf 'prices = [10, 20, 25]\ntotal = sum(prices)\ndiscount = 5\nprint(total - discount)\n' > demo.py
+sl-dbg install-adapter python
+sl-dbg start --lang python --program ./demo.py --stop-on-entry
+sl-dbg break demo.py:4
 sl-dbg continue
-sl-dbg locals
-sl-dbg eval "user.name"
+sl-dbg locals           # total is 55, discount is 5
 sl-dbg stop
 ```
+
+Language runtimes are separate prerequisites: Python with `venv`, Go for Delve
+and Go targets, JDK 11+ for Java. See [adapter setup](docs/ADAPTERS.md) for
+requirements, isolated Python environments, detection, and troubleshooting.
 
 ### Attach to a running JVM
 ```bash
 # Target (started normally with debug agent):
-#   java -agentlib:jdwp=transport=dt_socket,server=y,address=*:5005 -jar app.jar
+#   java -agentlib:jdwp=transport=dt_socket,server=y,address=127.0.0.1:5005 -jar app.jar
 
 sl-dbg attach --lang java --host localhost --port 5005
-sl-dbg break com.example.UserService:42 --if "user.id < 0"
+sl-dbg break com.example.UserService:42
 sl-dbg continue
 sl-dbg locals
 ```
@@ -142,9 +152,21 @@ via `debug_start`, pass `--allow-program /path/to/your/program` (repeatable).
 Pass `--read-only` to register the server with every mutating tool hidden,
 or `--insecure` to fall back to the legacy permissive mode (not recommended).
 
-### Uninstall
+### Upgrade or uninstall
+
+Rerun the installer to upgrade atomically. Existing daemons and MCP clients keep
+using old code: finish debug sessions, run `sl-dbg daemon stop`, then restart the
+MCP client. Installation never interrupts active sessions.
+
+For older `/usr/local/bin` installations, either set `INSTALL_DIR=/usr/local/bin`
+and run as its owner, or put `~/.local/bin` **before** `/usr/local/bin` in PATH.
+Use `command -v sl-dbg` to check which copy runs. Re-register MCP clients with
+`--force` when moving the binary; registrations use an absolute executable path.
+
 ```bash
-# Remove the binary AND the sl-dbg entry from every detected agent's MCP config
+# Finish sessions and stop the daemon BEFORE removing the binary:
+sl-dbg daemon stop
+# Remove ~/.local/bin/sl-dbg and detected MCP registrations (current workspace only):
 curl -fsSL https://raw.githubusercontent.com/y0geshpatil/sl-dbg/main/scripts/uninstall.sh | bash
 
 # Or surgically, just one agent
@@ -152,6 +174,9 @@ sl-dbg mcp uninstall claude       # also: cursor | vscode | codex | copilot | al
 sl-dbg mcp uninstall all --dry-run
 ```
 
+Use the same `INSTALL_DIR` override for removal. `--keep-mcp` removes only the
+binary. MCP cleanup failures retain the binary and return an error. Adapters,
+caches, backups, and other workspaces' registrations are not deleted.
 
 ## Platform Support
 
@@ -160,6 +185,7 @@ macOS is the tested development platform and Linux is supported with per-user Un
 ## Language-specific caveats
 
 **Java**
+- The current Java smoke observes `break-fn Buggy.compute` returning `verified:false` even after the class is loaded. Line breakpoints and inspection pass; the full Java suite is not green.
 - Compile with `javac -g` to get local variables — without `-g`, `locals` returns only `arg0/arg1/…` (JDWP limitation; `sl-dbg` will print a hint when it detects this).
 - `globals` returns no scope because the Java DAP doesn't expose statics as a scope. Use `sl-dbg eval ClassName.fieldName` (the `Hint` field on the response points at the current class).
 - Conditional breakpoints on a `for (...)` header line fire on loop init when the loop variable isn't yet in scope. Put the breakpoint on the body line for reliable conditions.
@@ -192,7 +218,7 @@ macOS is the tested development platform and Linux is supported with per-user Un
 │  sl-dbg (thin CLI)                                       │
 │  argv → IPC → JSON out                                   │
 └──────────────────────┬───────────────────────────────────┘
-                       │ Unix socket / named pipe
+                                              │ Unix socket
 ┌──────────────────────▼───────────────────────────────────┐
 │  sl-dbgd (daemon, same binary)                           │
 │  Session manager • Event multiplexer • Source mapping    │
@@ -200,7 +226,7 @@ macOS is the tested development platform and Linux is supported with per-user Un
                        │ DAP (JSON-RPC over stdio)
 ┌──────────────────────▼───────────────────────────────────┐
 │  Language DAP adapter (subprocess)                       │
-│  debugpy • java-debug • dlv dap • lldb-dap • netcoredbg  │
+│  debugpy • java-debug • dlv dap                           │
 └──────────────────────┬───────────────────────────────────┘
                        │ Native debug interface
                        ▼

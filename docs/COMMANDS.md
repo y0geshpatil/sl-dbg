@@ -23,17 +23,35 @@ List registered language adapters and detection status.
 ]}}
 ```
 
-### `sl-dbg install-adapter <lang>`
-Bootstrap a missing adapter (pip install, go install, download jar, …).
+### `sl-dbg install-adapter <python|go|java|all> [--force]`
+Install the selected adapter; `all` attempts all three and returns an error if
+any fail. Python uses an existing debugpy installation or a managed virtual
+environment; Go installs Delve; released Java binaries download the same-version
+JAR and mandatory SHA-256 sidecar. `--force` refreshes an existing adapter.
+See [ADAPTERS.md](ADAPTERS.md) for prerequisite/runtime detection and cache paths.
 
 ### `sl-dbg daemon [start|stop|status|logs]`
 Direct daemon control. Normally implicit.
 
-### `sl-dbg config get|set <key> [value]`
-Read/write user config.
-
 ### `sl-dbg mcp`
-Run as an MCP server over stdio. Exposes every other command as an MCP tool. (Planned, Phase 5.)
+Run the MCP server over stdio. `tools/list` is the authoritative schema for the
+running binary. Safe mode is the default; evaluation is disabled unless explicitly
+enabled. See [AGENT-GUIDE.md](AGENT-GUIDE.md).
+
+### `sl-dbg mcp install <agent>` / `sl-dbg mcp uninstall <agent>`
+Supported clients: `claude` (Desktop), `cursor`, `vscode` (current workspace),
+`codex`, `copilot`, and `all` (detected clients). `--dry-run` previews changes;
+install `--print` emits snippets without writing; `--force` explicitly replaces
+an existing entry. Configs are backed up before atomic updates. Any failed client
+update makes the command fail, even if other clients were updated successfully.
+
+VS Code uses `.vscode/mcp.json` with a `servers` object. Copilot CLI uses
+`~/.copilot/mcp-config.json` with `mcpServers`. Registrations use the installed
+binary's absolute path; rerun with `--force` after moving the binary. TOML forms
+that cannot be safely edited are refused; use the printed snippet to edit manually.
+
+The proposed TOML application config is not loaded yet; see
+[CONFIGURATION.md](CONFIGURATION.md). There is no `sl-dbg config` subcommand.
 
 ---
 
@@ -43,7 +61,7 @@ Run as an MCP server over stdio. Exposes every other command as an MCP tool. (Pl
 Launch a new debug session by starting the program.
 
 Flags:
-- `--lang` — required (python, java, go, cpp, dotnet, node, rust)
+- `--lang` — required (python, java, go)
 - `--program` — path to entrypoint
 - `--args "<args>"` — arguments passed to the program
 - `--cwd <dir>` — working directory
@@ -51,7 +69,7 @@ Flags:
 - `--stop-on-entry` — pause at first line
 - `--source-root <dir>` (repeatable)
 - `--read-only` — forbid state mutation
-- `--make-default` — set as default session (default true if first)
+- `--name` — optional unique session name; each new session becomes the default
 
 Response:
 ```json
@@ -66,8 +84,10 @@ sl-dbg attach --lang java --host localhost --port 5005
 sl-dbg attach --lang python --pid 12345
 ```
 
-### `sl-dbg listen --lang <L> --port <P>`
-Listen for a target to connect (reverse attach). Useful for firewalled targets.
+### `sl-dbg listen [--timeout <duration>]`
+Wait for the current session to pause or terminate. This is not a reverse-attach
+network listener. If already paused or terminated, return the current stop
+immediately. Entry pauses that arrive during adapter launch are retained.
 
 ### `sl-dbg sessions`
 List all active sessions.
@@ -140,10 +160,11 @@ sl-dbg break-ex NullPointerException --uncaught
 sl-dbg break-ex ValueError --all
 ```
 
-### `sl-dbg watch <expression>`
-Data breakpoint — break when expression value changes.
+### `sl-dbg watch [--add <expression> | --remove <id> | --remove-all]`
+List, add, or remove persistent watch expressions. Watches are evaluated while
+paused; they do not set data breakpoints and require evaluation permission to add.
 ```bash
-sl-dbg watch user.balance
+sl-dbg watch --add user.balance
 ```
 
 ### `sl-dbg breaks`
@@ -151,9 +172,6 @@ List all breakpoints.
 
 ### `sl-dbg unbreak <id> [...]`
 Remove one or more. `--all` removes all.
-
-### `sl-dbg enable <id>` / `sl-dbg disable <id>`
-Toggle without removing.
 
 ---
 
@@ -179,14 +197,8 @@ Step out of current frame.
 ### `sl-dbg until <line>`
 Continue until reaching line (auto-removes after).
 
-### `sl-dbg goto <line>`
-Jump to line without executing intervening code (where supported).
-
 ### `sl-dbg pause`
 Pause a running target.
-
-### `sl-dbg back` / `sl-dbg reverse`
-Step backward / reverse-run (where adapter supports it).
 
 Common response:
 ```json
@@ -235,19 +247,10 @@ Evaluate an expression in the current (or specified) frame. **Refused on `--read
 ### `sl-dbg set <name> <value> [--frame N]`
 Modify a variable.
 
-### `sl-dbg watch-expr <expression>` / `sl-dbg watches` / `sl-dbg unwatch-expr <id>`
-Persistent watch expressions, evaluated and returned with every pause.
-
-### `sl-dbg exception`
-Details about the current exception (only valid when paused on exception).
-
 ### `sl-dbg source [--frame N] [--around L]`
 Source code around current line. May also be invoked with `--file <path>` and `--line <n>` to view a specific location.
 
 **Security:** the daemon only returns files that resolve under the session's source-root allowlist — explicit `--source-root` values, the launch cwd, the program directory, files containing registered breakpoints, and the current pause location. When `SL_DBG_ALLOW_SOURCE_ROOT` is set, paths under those directories are also accepted. Paths containing `..` segments are rejected unconditionally. Anything else returns `SOURCE_PATH_DENIED`. This prevents `source --file` from being used as an arbitrary-file-read primitive against the daemon user, even in `--read-only` sessions. Issue #57.
-
-### `sl-dbg modules`
-Loaded modules / shared libraries / JARs.
 
 ### `sl-dbg snapshot`
 Full state dump: stack + locals for every frame + globals + watches. Best command for an agent to "see everything" at a pause point.
@@ -275,11 +278,11 @@ Daemon log tail (for debugging sl-dbg itself).
 
 ---
 
-## Memory & Disassembly (Phase 4+)
+## Not implemented
 
-### `sl-dbg mem read <addr> <size>`
-### `sl-dbg mem write <addr> <hex>`
-### `sl-dbg disasm <addr> [--count N]`
+Reverse execution, `goto`, data breakpoints, module/exception inspection commands,
+memory/disassembly commands, and breakpoint enable/disable commands are not
+registered. They are design/roadmap topics, not supported CLI interfaces.
 
 ---
 

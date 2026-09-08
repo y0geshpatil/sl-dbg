@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
 # Runs every e2e test under test/e2e. Skip-on-prereq (exit 77) does NOT fail the run.
-# Each test runs against a freshly-restarted daemon so prior state never leaks.
+# Each test owns its isolated daemon and cleans it up, including when run alone.
 set -uo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$(cd "$DIR/../.." && pwd)"
-SLDBG="${SL_DBG_BIN:-$REPO/bin/sl-dbg}"
-# e2e suites exercise eval / set / watch / conditional breakpoints; the daemon
-# default-denies them per #54 so explicitly opt in for the test run.
-export SL_DBG_ALLOW_EVAL=1
 PASS=0; SKIP=0; FAIL=0
 for t in "$DIR"/*.sh; do
-  case "$(basename "$t")" in run-all.sh) continue ;; esac
+  case "$(basename "$t")" in run-all.sh|common.sh) continue ;; esac
   echo
   echo "############### $(basename "$t") ###############"
-  # Kill any existing daemon so each suite starts clean.
-  "$SLDBG" daemon stop >/dev/null 2>&1 || true
-  sleep 0.3
   bash "$t"
   rc=$?
   case "$rc" in
@@ -24,7 +16,6 @@ for t in "$DIR"/*.sh; do
     *)  FAIL=$((FAIL+1)) ;;
   esac
 done
-"$SLDBG" daemon stop >/dev/null 2>&1 || true
 echo
 echo "############### summary: pass=$PASS skip=$SKIP fail=$FAIL ###############"
 [[ $FAIL -eq 0 ]]

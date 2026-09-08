@@ -6,13 +6,14 @@
 
 | Platform | Status | Notes |
 |---|---|---|
-| macOS | Tested / assumed working | Primary development platform. Unix-domain sockets are supported. |
-| Linux | Supported target | Uses per-user runtime directories when available; see socket paths below. |
+| macOS amd64 / arm64 | Release targets | Unit and adapter smoke coverage on macOS CI; Unix-domain sockets. |
+| Linux amd64 / arm64 | Release targets | Unit and adapter smoke coverage on Linux CI; per-user Unix-domain sockets. |
 | Windows | Not yet supported | Requires named pipes or a Windows-specific socket strategy before support is claimed. |
 
 ## macOS
 
-Install the binary somewhere on your `PATH`, commonly:
+The installer defaults to `~/.local/bin/sl-dbg` on both macOS and Linux,
+creating the directory without sudo. Other manually managed locations include:
 
 - `~/bin/sl-dbg`
 - `/usr/local/bin/sl-dbg`
@@ -28,13 +29,16 @@ The daemon socket path is:
 $XDG_RUNTIME_DIR/sl-dbg/daemon.sock
 ```
 
-If `XDG_RUNTIME_DIR` is unset, `sl-dbg` falls back to:
+If `XDG_RUNTIME_DIR` is unset, `sl-dbg` falls back to the system temporary
+directory (`$TMPDIR` when set; usually `/tmp` on Linux):
 
 ```text
 /tmp/sl-dbg-$UID/daemon.sock
 ```
 
 The socket directory is created with `0700` permissions and the socket is chmodded to `0600`.
+`SL_DBG_SOCKET=/absolute/path/daemon.sock` selects an isolated daemon endpoint
+(used by e2e tests); it takes precedence over the runtime directory.
 
 Recommended install paths:
 
@@ -72,17 +76,17 @@ mkdir -p "$HOME/.local/bin"
 fish_add_path "$HOME/.local/bin"
 ```
 
-### PowerShell
-
-PowerShell snippets are for future Windows support or cross-shell convenience on macOS/Linux:
-
-```pwsh
-$dir = Join-Path $HOME ".local/bin"
-New-Item -ItemType Directory -Force -Path $dir | Out-Null
-[Environment]::SetEnvironmentVariable("PATH", "$dir$([IO.Path]::PathSeparator)$env:PATH", "User")
-```
-
 Restart the shell after changing the user PATH.
+
+The installer cannot modify its parent shell's PATH. If `sl-dbg` is still not
+found, run `"$HOME/.local/bin/sl-dbg" version` directly. If an older binary wins,
+check `command -v sl-dbg`, prepend the new directory, and restart the shell.
+When moving from `/usr/local/bin`, either explicitly select that `INSTALL_DIR`
+as its owner or re-register MCP clients to use the new absolute binary path.
+
+Rerunning the installer upgrades the binary, not running processes. Finish debug
+sessions and run `sl-dbg daemon stop`; restart MCP clients afterward. The
+installer and uninstaller never stop live debugging processes automatically.
 
 ## How to Verify Your Install
 
