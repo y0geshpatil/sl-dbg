@@ -42,7 +42,10 @@ contains() { echo "$1" | grep -q "$2" || fail "expected $2 in: $1"; }
 PROG="$REPO/examples/go/buggy.go"
 
 echo "== start =="
-OUT=$("$SLDBG" start --lang go --program "$PROG" --stop-on-entry)
+if ! OUT=$("$SLDBG" start --lang go --program "$PROG" --stop-on-entry); then
+  echo "$OUT" >&2
+  exit 1
+fi
 contains "$OUT" '"state":"paused"'
 
 echo "== break =="

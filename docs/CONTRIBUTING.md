@@ -5,7 +5,7 @@ Thanks for your interest in `sl-dbg`. This document covers development setup, co
 ## Development Setup
 
 ### Prerequisites
-- Go 1.22+ (`brew install go`)
+- Go 1.26.4 (the CI/release toolchain; language minimum is 1.22)
 - One or more DAP adapters for integration testing:
   - `./bin/sl-dbg install-adapter python` (requires Python and `venv`)
   - `go install github.com/go-delve/delve/cmd/dlv@latest`

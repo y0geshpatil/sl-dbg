@@ -31,7 +31,10 @@ working until a complete new release has been published and exercised.
 
 ## Local preflight (does not publish)
 
-Requires Go 1.22+, JDK 11+, Maven, and GoReleaser **2.16.0** (the CI-pinned version).
+Requires Go **1.26.4**, JDK 11+, Maven, and GoReleaser **2.16.0** (the CI-pinned versions).
+The Go language minimum remains 1.22, but releases use the newer compiler:
+Go 1.22 binaries can fail to load on current macOS (`missing LC_UUID`), and
+current Delve requires a newer toolchain for its target builds.
 
 ```bash
 make build
